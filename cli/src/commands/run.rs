@@ -528,7 +528,7 @@ pub fn run_simulation(params: &SimParams) -> Result<Recording, CmdError> {
         .with_event_checker(body_event_checker::<OrbitalState>(params));
 
     let third_bodies = default_third_bodies(&params.body).map_err(|e| {
-        CmdError::usage(format!(
+        CmdError::failure(format!(
             "central body {}: {e}",
             params.body.properties().name
         ))
@@ -576,7 +576,7 @@ pub fn run_spacecraft_simulation(params: &SimParams) -> Result<Recording, CmdErr
         >(params));
 
     let third_bodies = default_third_bodies(&params.body).map_err(|e| {
-        CmdError::usage(format!(
+        CmdError::failure(format!(
             "central body {}: {e}",
             params.body.properties().name
         ))
