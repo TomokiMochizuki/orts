@@ -223,7 +223,7 @@ pub fn spacecraft_dynamics_for(
     att: &AttitudeConfig,
     params: &SimParams,
     third_bodies: &[ThirdBodyGravity],
-) -> SpacecraftDynamics<Box<dyn GravityField>> {
+) -> Result<SpacecraftDynamics<Box<dyn GravityField>>, String> {
     build_spacecraft_dynamics(
         &params.body,
         params.mu,
@@ -233,6 +233,7 @@ pub fn spacecraft_dynamics_for(
         att.inertia_matrix(),
         params.build_atmosphere_model(),
     )
+    .map_err(|e| format!("solar force models: {e}"))
 }
 
 #[cfg(test)]
