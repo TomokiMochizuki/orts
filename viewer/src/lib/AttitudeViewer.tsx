@@ -1,5 +1,5 @@
-import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { Canvas } from "@react-three/fiber";
+import { InitialCameraFit } from "../components/InitialCameraFit.js";
 import { SCENE_UP } from "../sceneFrame.js";
 import { cameraDistanceForSpan, NOMINAL_SPACECRAFT_SPAN } from "../spacecraftScale.js";
 import { AttitudeScene } from "./AttitudeScene.js";
@@ -20,29 +20,6 @@ const DEFAULT_CAMERA_POSITION: [number, number, number] = (() => {
   const d = cameraDistanceForSpan(NOMINAL_SPACECRAFT_SPAN, DEFAULT_FOV);
   return [CAMERA_DIRECTION[0] * d, CAMERA_DIRECTION[1] * d, CAMERA_DIRECTION[2] * d];
 })();
-
-/**
- * Pull the camera back once, if the viewport turns out to be narrower than the
- * default framing assumed.
- *
- * The `camera` prop is read at mount, before the canvas has a size, so a portrait
- * embedding would otherwise clip the axes sideways. Applied on the first sizing
- * only: reframing on every resize would undo a zoom the viewer had chosen, and
- * this is a starting view, not a constraint.
- */
-function InitialCameraFit({ fov }: { fov: number }) {
-  const camera = useThree((s) => s.camera);
-  const size = useThree((s) => s.size);
-  const applied = useRef(false);
-  useEffect(() => {
-    if (applied.current || size.width === 0 || size.height === 0) return;
-    applied.current = true;
-    const needed = cameraDistanceForSpan(NOMINAL_SPACECRAFT_SPAN, fov, size.width / size.height);
-    const current = camera.position.length();
-    if (current > 0 && needed > current) camera.position.multiplyScalar(needed / current);
-  }, [camera, size, fov]);
-  return null;
-}
 
 /**
  * Embeddable attitude viewer.
