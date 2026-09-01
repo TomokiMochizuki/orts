@@ -22,6 +22,12 @@ export interface DebugDirectionVector {
   kind: string;
   /** Unit vector from the arrow's origin to its head, in world (scene) axes. */
   direction: [number, number, number];
+  /**
+   * Distance from the arrow's origin to its head's centre, in scene units.
+   * Reported unnormalised so a test can pin the proportions too: it is
+   * `startOffset + length - headLength / 2` for the spacecraft's apparent size.
+   */
+  distance: number;
 }
 
 /** The scene objects an arrow's drawn direction is measured between. */
@@ -50,7 +56,7 @@ function measure(arrows: DrawnArrow[]): DebugDirectionVector[] {
     const len = d.length();
     if (!(len > 0)) continue;
     d.divideScalar(len);
-    out.push({ kind: arrow.kind, direction: [d.x, d.y, d.z] });
+    out.push({ kind: arrow.kind, direction: [d.x, d.y, d.z], distance: len });
   }
   return out;
 }

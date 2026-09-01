@@ -4,6 +4,9 @@ import {
   arrowGeometryForSpan,
   axisLengthForSpan,
   cameraDistanceForSpan,
+  DEFAULT_CUBE_HALF_EXTENT,
+  DEFAULT_SPHERE_RADIUS,
+  defaultMarkerSize,
   drawnExtentForSpan,
   frameAxisLengthForSpan,
   NOMINAL_SPACECRAFT_SPAN,
@@ -56,6 +59,16 @@ describe("resolveVisualSpan", () => {
   it("uses the marker footprint when there is no model", () => {
     expect(resolveVisualSpan({ modelConfig: null, markerSize: 0.005 })).toBeCloseTo(0.01, 12);
     expect(resolveVisualSpan({ markerSize: 0.008 })).toBeCloseTo(0.016, 12);
+  });
+});
+
+describe("defaultMarkerSize", () => {
+  it("gives each marker shape its own footprint", () => {
+    // The sphere and the orientation cube are drawn at different sizes, and the
+    // span a caller derives from them differs accordingly.
+    expect(defaultMarkerSize("sphere")).toBeCloseTo(DEFAULT_SPHERE_RADIUS, 12);
+    expect(defaultMarkerSize("axes-cube")).toBeCloseTo(DEFAULT_CUBE_HALF_EXTENT, 12);
+    expect(defaultMarkerSize("axes-cube")).toBeGreaterThan(defaultMarkerSize("sphere"));
   });
 });
 
