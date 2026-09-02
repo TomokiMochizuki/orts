@@ -507,6 +507,16 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 #### Added
 - `IntegrationError` が `core::error::Error` を実装 (手書き、`thiserror` 不使用、
   `no_std` でも動作)。`?` 連鎖や `Box<dyn Error>` に乗るようになった。([#147](https://github.com/sksat/orts/pull/147))
+- テスト: 保存量のテストが、軌道が実際に動いたことを要求するようになった。
+  エネルギー drift も Lotka-Volterra の不変量も、状態が変化しなければ完全に
+  保存される。symplectic のテストは長時間積分の後半 drift を前半と比べていた
+  ため、初手で全エネルギーを失っても「有界」と読めていた。実測: accept した
+  状態を毎ステップゼロにすると 6 件が通り、`Rk4::step` を凍結すると RK4 の
+  保存則テスト 2 件が通った。各テストに初期エネルギーで正規化した drift の
+  上限、状態が移動したことの検査、`ln` が読む個体数の正値性を追加した。
+  `tight_tolerance_dop853_fewer_evaluations` も、評価回数を比べる前に両者が
+  `t_end` まで完走して正しい解に達したことを要求する。
+  ([#TBD](https://github.com/sksat/orts/pull/TBD))
 
 #### Fixed
 - `Integrator::try_integrate` が、結果が非有限になった最初のステップで
