@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import type * as THREE from "three";
 import { registerSatWorldQuat } from "../debug/satWorldQuat.js";
-import { AxisLabels } from "./AxisLabels.js";
 
 interface BodyAxesProps {
   /** Position in scene units (already divided by scaleRadius). */
@@ -17,12 +16,6 @@ interface BodyAxesProps {
    * equals the rendered body orientation in every display variant.
    */
   debugId?: string;
-  /**
-   * Draw X / Y / Z at the tips. Off by default: an orbit view can hold many
-   * satellites, and a letter at every axis tip on each of them is noise. The
-   * attitude view, whose subject *is* the orientation, turns it on.
-   */
-  labels?: boolean;
 }
 
 /**
@@ -30,13 +23,7 @@ interface BodyAxesProps {
  *
  * Uses the same quaternion-application pattern as SatelliteModel.tsx.
  */
-export function BodyAxes({
-  position,
-  quaternion,
-  axisLength = 0.03,
-  debugId,
-  labels = false,
-}: BodyAxesProps) {
+export function BodyAxes({ position, quaternion, axisLength = 0.03, debugId }: BodyAxesProps) {
   const groupRef = useRef<THREE.Group>(null);
 
   useEffect(() => {
@@ -54,7 +41,6 @@ export function BodyAxes({
   return (
     <group position={position} ref={groupRef}>
       <axesHelper args={[axisLength]} />
-      {labels && <AxisLabels length={axisLength} />}
     </group>
   );
 }

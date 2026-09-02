@@ -11,7 +11,6 @@ import {
   NOMINAL_SPACECRAFT_SPAN,
   spanNormalizedModelScale,
 } from "../spacecraftScale.js";
-import { AxisLabels } from "./AxisLabels.js";
 import { DirectionArrows } from "./DirectionArrows.js";
 import { SpacecraftVisual } from "./SpacecraftVisual.js";
 
@@ -132,7 +131,6 @@ export function AttitudeSceneContents({
         markerSize={span / 2}
         axisLength={axisLengthForSpan(span)}
         modelScale={modelScale}
-        axisLabels
       />
 
       <DirectionArrows position={ORIGIN} vectors={vectors} visualSpan={span} debugId={satId} />
