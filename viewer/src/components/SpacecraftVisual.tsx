@@ -53,6 +53,8 @@ interface SpacecraftVisualProps {
   axisLength?: number;
   /** Model scale, overriding the registry's own (scene units per model unit). */
   modelScale?: number;
+  /** Draw X / Y / Z at the body-axis tips. */
+  axisLabels?: boolean;
 }
 
 /**
@@ -79,6 +81,7 @@ export function SpacecraftVisual({
   markerSize,
   axisLength,
   modelScale,
+  axisLabels = false,
 }: SpacecraftVisualProps) {
   const modelConfig = satId ? getSatelliteModelConfig(satId, satName) : null;
   const resolvedAxisLength =
@@ -90,6 +93,7 @@ export function SpacecraftVisual({
       quaternion={quaternion}
       axisLength={resolvedAxisLength}
       debugId={satId}
+      labels={axisLabels}
     />
   ) : null;
 

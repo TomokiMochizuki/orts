@@ -18,6 +18,11 @@
       ],
       "files": [
         {
+          "path": "src/axisLabels.ts",
+          "type": "registry:lib",
+          "target": "@components/orbit-viewer/axisLabels.ts"
+        },
+        {
           "path": "src/bodies.ts",
           "type": "registry:lib",
           "target": "@components/orbit-viewer/bodies.ts"
@@ -26,6 +31,11 @@
           "path": "src/components/AttitudeSceneContents.tsx",
           "type": "registry:component",
           "target": "@components/orbit-viewer/components/AttitudeSceneContents.tsx"
+        },
+        {
+          "path": "src/components/AxisLabels.tsx",
+          "type": "registry:component",
+          "target": "@components/orbit-viewer/components/AxisLabels.tsx"
         },
         {
           "path": "src/components/BodyAxes.tsx",
