@@ -5,6 +5,7 @@ use arika::elements::ParsedElementSet;
 use arika::epoch::Epoch;
 use utsuroi::Tolerances;
 
+use crate::cli::FrameChoice;
 use crate::cli::{
     AtmosphereChoice, IntegratorChoice, PluginAsyncModeChoice, PluginBackendChoice, SimArgs,
 };
@@ -177,6 +178,12 @@ pub struct SimParams {
     pub f107: f64,
     pub ap: f64,
     pub space_weather_provider: Option<Arc<tobari::CssiSpaceWeather>>,
+    /// Inertial frame the orbit is propagated in.
+    pub frame: FrameChoice,
+    /// Observed Earth Orientation Parameters for `frame = gcrs`. `None` means
+    /// the frame needs none (`simple-eci`) or `eop = "zero"` was asked for.
+    /// Shared by every model that orients the Earth.
+    pub eop: Option<Arc<arika::earth::eop::EopTable>>,
     /// Spherical-harmonic gravity field (`--gravity-field` / `[gravity_field]`),
     /// already truncated. `Some` replaces `ZonalGravity` and is where `mu`
     /// came from. Shared by every satellite's system (`Arc`).
@@ -267,11 +274,11 @@ impl SimParams {
     /// Build SimParams from CLI arguments.
     /// `is_serve`: when true and no orbit args are given, defaults to SSO+ISS.
     ///
-    /// Loads the resources the arguments name (`--gravity-field`) itself, so
-    /// a missing or malformed file is an `Err` here rather than a panic — the
-    /// same constructor serves `orts run`, `orts serve` and the tests, and a
-    /// resource added later is a new load inside, not a new parameter at
-    /// every call site.
+    /// Loads the resources the arguments name (`--gravity-field`, `--eop`)
+    /// itself, so a missing or malformed file is an `Err` here rather than a
+    /// panic — the same constructor serves `orts run`, `orts serve` and the
+    /// tests, and a resource added later is a new load inside, not a new
+    /// parameter at every call site.
     // TODO: the orbit-argument conflicts (`--sat` next to `--tle`, …) and
     // `--space-weather` still panic; folding them into this `Result` is a
     // behaviour change for `serve`'s legacy path and is left to its own change.
@@ -282,6 +289,7 @@ impl SimParams {
             args.gravity_degree,
             args.gravity_order,
         )?;
+        let eop = Self::load_eop(args.eop.as_deref())?;
         // `mu` is the field's GM when one is configured, and it sizes every
         // satellite's period and initial state below — so it is resolved
         // before the satellites.
@@ -390,6 +398,8 @@ impl SimParams {
             f107: args.f107,
             ap: args.ap,
             space_weather_provider: Self::load_space_weather(args.space_weather.as_deref()),
+            frame: args.frame,
+            eop,
             gravity_field,
             plugin_backend_choice: args.plugin_backend,
             plugin_backend_threshold: args.plugin_backend_threshold,
@@ -399,8 +409,8 @@ impl SimParams {
 
     /// Build SimParams from a config file.
     ///
-    /// Loads `[gravity_field]` itself; a missing or malformed file is an
-    /// `Err`, so `orts serve` can refuse it on the main task instead of
+    /// Loads `[gravity_field]` and `eop` itself; a missing or malformed file
+    /// is an `Err`, so `orts serve` can refuse it on the main task instead of
     /// panicking inside the spawned manager (which would leave the server up
     /// with nobody behind the command channel). A WebSocket
     /// `start_simulation` cannot carry `[gravity_field]`
@@ -411,6 +421,7 @@ impl SimParams {
             Some(gf) => Self::load_gravity_field(Some(&gf.path), gf.degree, gf.order)?,
             None => None,
         };
+        let eop = Self::load_eop(config.eop.as_deref())?;
         // Field before `mu`: see `from_sim_args`.
         let mu = Self::resolve_mu(body, gravity_field.as_deref());
 
@@ -465,6 +476,8 @@ impl SimParams {
             f107: config.f107,
             ap: config.ap,
             space_weather_provider: Self::load_space_weather(config.space_weather.as_deref()),
+            frame: config.frame_choice(),
+            eop,
             gravity_field,
             // Config-file path: no CLI override, use defaults. The
             // auto selection logic falls back to its derived threshold.
@@ -507,6 +520,35 @@ impl SimParams {
         let field = tobari::gravity::SphericalHarmonicField::new(coefficients, degree, order)
             .map_err(|e| format!("gravity field truncation {degree}x{order}: {e}"))?;
         Ok(Some(Arc::new(field)))
+    }
+
+    /// Load Earth Orientation Parameters from `--eop` / `eop`.
+    ///
+    /// `"auto"` downloads the IERS `finals2000A.all` series (24 h cache),
+    /// `"zero"` asks for no observed EOP at all (`Ok(None)`, the IAU 2006
+    /// model CIP), anything else is a finals2000A file path.
+    fn load_eop(source: Option<&str>) -> Result<Option<Arc<arika::earth::eop::EopTable>>, String> {
+        use arika::earth::eop::EopTable;
+        match source {
+            None | Some("zero") => Ok(None),
+            Some("auto") => {
+                let table = EopTable::fetch_default()
+                    .map_err(|e| format!("Failed to fetch EOP data from IERS: {e}"))?;
+                Ok(Some(Arc::new(table)))
+            }
+            Some(path) => {
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| format!("Failed to read EOP file {path}: {e}"))?;
+                let table = EopTable::from_finals2000a(&text)
+                    .map_err(|e| format!("Failed to parse EOP file {path}: {e}"))?;
+                Ok(Some(Arc::new(table)))
+            }
+        }
+    }
+
+    /// The EOP storage for frame `F`, built from the loaded table.
+    pub fn eop_storage<F: crate::sim::frame::RunFrame>(&self) -> F::EopStorage {
+        F::eop_storage(self.eop.as_ref())
     }
 
     /// Load space weather provider from a source string.
@@ -800,6 +842,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -832,6 +876,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -869,6 +915,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -906,6 +954,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -938,6 +988,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -972,6 +1024,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1014,6 +1068,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1051,6 +1107,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1110,6 +1168,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1156,6 +1216,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1208,6 +1270,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1256,6 +1320,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1299,6 +1365,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1336,6 +1404,8 @@ orbit = { type = "circular", altitude = 400 }
             gravity_field: None,
             gravity_degree: None,
             gravity_order: None,
+            frame: crate::cli::FrameChoice::SimpleEci,
+            eop: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -1486,5 +1556,57 @@ orbit = { type = "circular", altitude = 570 }
             Err(e) => e,
         };
         assert!(err.contains("/nonexistent/EGM.gfc"), "{err}");
+    }
+
+    // --- frame / eop -----------------------------------------------------
+
+    const EOP_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../orts/tests/fixtures/finals2000A.sample"
+    );
+
+    #[test]
+    fn load_eop_reads_a_finals2000a_file_and_reports_failures() {
+        assert!(SimParams::load_eop(None).unwrap().is_none());
+        // "zero" is "no observed EOP", not "no frame": the table is absent by
+        // request, and the Gcrs storage falls back to the model CIP.
+        assert!(SimParams::load_eop(Some("zero")).unwrap().is_none());
+
+        let table = SimParams::load_eop(Some(EOP_FIXTURE))
+            .unwrap()
+            .expect("a table");
+        let (start, end) = table.mjd_range();
+        assert!(
+            start < end && table.len() > 10,
+            "{start}..{end}, {} rows",
+            table.len()
+        );
+
+        // `EopTable` is not `Debug`, so the error is matched rather than
+        // unwrapped through it.
+        let missing = match SimParams::load_eop(Some("/nonexistent/finals2000A.all")) {
+            Err(e) => e,
+            Ok(_) => panic!("a missing EOP file must be an error"),
+        };
+        assert!(
+            missing.contains("/nonexistent/finals2000A.all"),
+            "{missing}"
+        );
+    }
+
+    /// The loaded table reaches the frame's storage, and `simple-eci` asks for
+    /// none.
+    #[test]
+    fn eop_storage_follows_the_frame() {
+        let cfg: SimConfig = toml::from_str(&format!(
+            "frame = \"gcrs\"\neop = \"{EOP_FIXTURE}\"\nepoch = \"2024-03-20T12:00:00Z\"\n\
+             \n[[satellites]]\nid = \"a\"\norbit = {{ type = \"circular\", altitude = 570 }}\n"
+        ))
+        .expect("valid toml");
+        let params = SimParams::from_config(&cfg).expect("the EOP fixture loads");
+        assert_eq!(params.frame, FrameChoice::Gcrs);
+        assert!(params.eop.is_some());
+        let _: arika::earth::GcrsEopStorage = params.eop_storage::<arika::frame::Gcrs>();
+        let _: () = params.eop_storage::<arika::frame::SimpleEci>();
     }
 }

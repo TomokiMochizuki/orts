@@ -184,6 +184,7 @@ fn unhonored_sim_args(sim: &SimArgs) -> Vec<&'static str> {
         ("--gravity-field", sim.gravity_field.is_some()),
         ("--gravity-degree", sim.gravity_degree.is_some()),
         ("--gravity-order", sim.gravity_order.is_some()),
+        ("--eop", sim.eop.is_some()),
     ]
     .into_iter()
     .filter_map(|(flag, differs)| differs.then_some(flag))
