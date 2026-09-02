@@ -55,6 +55,11 @@ interface SpacecraftVisualProps {
   axisLength?: number;
   /** Model scale, overriding the registry's own (scene units per model unit). */
   modelScale?: number;
+  /**
+   * The spacecraft's apparent size in scene units. Passing it draws the body axes
+   * as named arrows rather than one-pixel lines — see {@link BodyAxes}.
+   */
+  visualSpan?: number;
 }
 
 /**
@@ -81,6 +86,7 @@ export function SpacecraftVisual({
   markerSize,
   axisLength,
   modelScale,
+  visualSpan,
 }: SpacecraftVisualProps) {
   const modelConfig = satId ? getSatelliteModelConfig(satId, satName) : null;
   const resolvedAxisLength =
@@ -92,6 +98,7 @@ export function SpacecraftVisual({
       quaternion={quaternion}
       axisLength={resolvedAxisLength}
       debugId={satId}
+      visualSpan={visualSpan}
     />
   ) : null;
 
