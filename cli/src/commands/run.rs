@@ -518,6 +518,7 @@ pub fn run_simulation(params: &SimParams) -> Result<Recording, CmdError> {
             &sat_params(sat),
             &third_bodies,
             params.build_atmosphere_model(),
+            params.gravity_field(),
         )
         .map_err(|e| CmdError::failure(format!("solar force models: {e}")))?;
         let initial = sat
@@ -797,7 +798,7 @@ fn sim_metadata(params: &SimParams) -> orts::record::recording::SimMetadata {
         mu: Some(params.mu),
         body_radius: Some(params.body.properties().radius),
         body_name: Some(params.body.properties().name.to_string()),
-        altitude: first_sat.map(|s| s.altitude(&params.body)),
+        altitude: first_sat.map(|s| s.altitude(&params.body, params.mu)),
         period: first_sat.map(|s| s.period),
         orbit_description: orbit_desc,
     }
@@ -2333,6 +2334,8 @@ mod tests {
             },
             &[],
             inertia,
+            None,
+            // No spherical-harmonic field: these fixtures are the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");

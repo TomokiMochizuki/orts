@@ -145,11 +145,13 @@ impl SatelliteSpec {
     }
 
     /// Altitude for display purposes.
-    pub fn altitude(&self, body: &KnownBody) -> f64 {
+    /// `mu` is the simulation's gravitational parameter (the gravity field's
+    /// GM when one is configured), not necessarily the body's constant.
+    pub fn altitude(&self, body: &KnownBody, mu: f64) -> f64 {
         match &self.orbit {
             OrbitSpec::Circular { altitude, .. } => *altitude,
             OrbitSpec::ElementSet { elements } => {
-                let a = elements.semi_major_axis(body.properties().mu);
+                let a = elements.semi_major_axis(mu);
                 let perigee_r = a * (1.0 - elements.fields().eccentricity);
                 perigee_r - body.properties().radius
             }
@@ -232,8 +234,10 @@ pub struct SatelliteInfo {
 }
 
 /// Parse a satellite specification string (key=value,key=value).
-pub fn parse_sat_spec(s: &str, body: KnownBody) -> SatelliteSpec {
-    let mu = body.properties().mu;
+///
+/// `mu` sizes the circular orbit's period; pass the simulation's μ (the
+/// gravity field's GM when one is configured).
+pub fn parse_sat_spec(s: &str, body: KnownBody, mu: f64) -> SatelliteSpec {
     let mut id = String::new();
     let mut name: Option<String> = None;
     let mut altitude: Option<f64> = None;
@@ -404,7 +408,7 @@ mod tests {
 
     #[test]
     fn parse_sat_spec_circular_altitude() {
-        let spec = parse_sat_spec("altitude=800,id=sso", KnownBody::Earth);
+        let spec = parse_sat_spec("altitude=800,id=sso", KnownBody::Earth, arika::earth::MU);
         assert_eq!(spec.id, "sso");
         assert!(
             matches!(spec.orbit, OrbitSpec::Circular { altitude, .. } if (altitude - 800.0).abs() < 1e-9)
@@ -414,13 +418,17 @@ mod tests {
 
     #[test]
     fn parse_sat_spec_default_id() {
-        let spec = parse_sat_spec("altitude=600", KnownBody::Earth);
+        let spec = parse_sat_spec("altitude=600", KnownBody::Earth, arika::earth::MU);
         assert!(!spec.id.is_empty());
     }
 
     #[test]
     fn parse_sat_spec_with_name() {
-        let spec = parse_sat_spec("altitude=800,id=sso,name=SSO 800km", KnownBody::Earth);
+        let spec = parse_sat_spec(
+            "altitude=800,id=sso,name=SSO 800km",
+            KnownBody::Earth,
+            arika::earth::MU,
+        );
         assert_eq!(spec.id, "sso");
         assert_eq!(spec.name.as_deref(), Some("SSO 800km"));
     }
@@ -430,6 +438,7 @@ mod tests {
         let spec = parse_sat_spec(
             "tle-line1=1 25544U 98067A   24079.50000000  .00016717  00000-0  30000-4 0  9996,tle-line2=2 25544  51.6400 208.6520 0007417  35.3910 324.7580 15.49561654480008,id=iss",
             KnownBody::Earth,
+            arika::earth::MU,
         );
         assert_eq!(spec.id, "iss");
         assert!(matches!(spec.orbit, OrbitSpec::ElementSet { .. }));
@@ -437,7 +446,7 @@ mod tests {
 
     #[test]
     fn satellite_spec_initial_state_circular() {
-        let spec = parse_sat_spec("altitude=400,id=test", KnownBody::Earth);
+        let spec = parse_sat_spec("altitude=400,id=test", KnownBody::Earth, arika::earth::MU);
         let mu = KnownBody::Earth.properties().mu;
         let state = spec.initial_state(mu, None).unwrap();
         let r = state.position().magnitude();
@@ -454,6 +463,7 @@ mod tests {
         let spec = parse_sat_spec(
             "altitude=800,inclination=98.6,id=sso-test",
             KnownBody::Earth,
+            arika::earth::MU,
         );
         let state = spec.initial_state(mu, None).unwrap();
 
@@ -488,6 +498,7 @@ mod tests {
         let spec = parse_sat_spec(
             "altitude=400,inclination=51.6,raan=90,id=iss-like",
             KnownBody::Earth,
+            arika::earth::MU,
         );
         let state = spec.initial_state(mu, None).unwrap();
 
@@ -517,7 +528,7 @@ mod tests {
     #[test]
     fn satellite_spec_initial_state_equatorial_default() {
         let mu = KnownBody::Earth.properties().mu;
-        let spec = parse_sat_spec("altitude=400,id=test", KnownBody::Earth);
+        let spec = parse_sat_spec("altitude=400,id=test", KnownBody::Earth, arika::earth::MU);
         let state = spec.initial_state(mu, None).unwrap();
         assert!(
             state.position()[2].abs() < 1e-10,
@@ -528,7 +539,7 @@ mod tests {
 
     #[test]
     fn satellite_spec_entity_path() {
-        let spec = parse_sat_spec("altitude=400,id=my-sat", KnownBody::Earth);
+        let spec = parse_sat_spec("altitude=400,id=my-sat", KnownBody::Earth, arika::earth::MU);
         let path = spec.entity_path();
         assert_eq!(path.to_string(), "/world/sat/my-sat");
     }
@@ -538,8 +549,8 @@ mod tests {
     #[test]
     fn ensure_unique_ids_rejects_a_repeated_id() {
         let specs = [
-            parse_sat_spec("altitude=400,id=a", KnownBody::Earth),
-            parse_sat_spec("altitude=800,id=a", KnownBody::Earth),
+            parse_sat_spec("altitude=400,id=a", KnownBody::Earth, arika::earth::MU),
+            parse_sat_spec("altitude=800,id=a", KnownBody::Earth, arika::earth::MU),
         ];
         assert_eq!(
             specs[0].entity_path().to_string(),
@@ -553,8 +564,8 @@ mod tests {
     #[test]
     fn ensure_unique_ids_accepts_distinct_ids() {
         let specs = [
-            parse_sat_spec("altitude=400,id=a", KnownBody::Earth),
-            parse_sat_spec("altitude=800,id=b", KnownBody::Earth),
+            parse_sat_spec("altitude=400,id=a", KnownBody::Earth, arika::earth::MU),
+            parse_sat_spec("altitude=800,id=b", KnownBody::Earth, arika::earth::MU),
         ];
         ensure_unique_ids(&specs).expect("distinct ids must be accepted");
     }

@@ -968,6 +968,8 @@ mod tests {
             &[],
             inertia,
             None,
+            // No spherical-harmonic field: this fixture is the zonal path.
+            None,
         )
         .expect("Earth has a Sun ephemeris");
 
