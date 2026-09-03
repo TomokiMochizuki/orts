@@ -871,6 +871,7 @@ mod tests {
             &sat,
             &third_bodies,
             None,
+            None,
         )
         .expect("Mars is supported");
 
@@ -933,6 +934,7 @@ mod tests {
             Some(epoch),
             &sat,
             &third_bodies,
+            None,
             None,
         )
         .expect("Mars is supported");
@@ -997,6 +999,7 @@ mod tests {
                 &sat,
                 &[],
                 None,
+                None,
             )
             .is_err(),
             "SRP for Uranus should be refused"
@@ -1060,12 +1063,14 @@ mod tests {
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
         let with_field =
-            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)));
+            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)))
+                .expect("Earth has a Sun ephemeris");
         let names = with_field.model_names();
         assert!(names.contains(&"spherical_harmonic_gravity"), "{names:?}");
         assert!(!names.contains(&"zonal_gravity"), "{names:?}");
 
-        let without = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None);
+        let without = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None)
+            .expect("Earth has a Sun ephemeris");
         let names = without.model_names();
         assert!(names.contains(&"zonal_gravity"), "{names:?}");
         assert!(!names.contains(&"spherical_harmonic_gravity"), "{names:?}");
@@ -1085,7 +1090,8 @@ mod tests {
             Matrix3::identity(),
             None,
             Some(earth_field(mu)),
-        );
+        )
+        .expect("Earth has a Sun ephemeris");
         let names = dynamics.model_names();
         assert!(names.contains(&"spherical_harmonic_gravity"), "{names:?}");
         assert!(!names.contains(&"zonal_gravity"), "{names:?}");
@@ -1100,8 +1106,10 @@ mod tests {
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
         let with_field =
-            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)));
-        let zonal = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None);
+            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)))
+                .expect("Earth has a Sun ephemeris");
+        let zonal = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None)
+            .expect("Earth has a Sun ephemeris");
         let state = crate::OrbitalState::new(
             nalgebra::Vector3::new(4000.0, -3000.0, 5000.0),
             nalgebra::Vector3::new(0.0, 7.5, 0.0),
