@@ -158,6 +158,7 @@ fn build_system_through_setup(fixtures: &FixtureFile, sc: &Scenario) -> OrbitalS
         Some(field),
         eop,
     )
+    .expect("Earth has a Sun ephemeris")
 }
 
 /// Propagate and return the largest position error [km] over the fixture's
