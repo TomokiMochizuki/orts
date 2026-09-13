@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { TORQUE_AXES, TORQUE_CHART_METRICS } from "../chartMetrics.js";
-import { isTorqueChartActive, TORQUE_CHART_DEFS } from "./torqueCharts.js";
+import { buildTorqueChartData, isTorqueChartActive, TORQUE_CHART_DEFS } from "./torqueCharts.js";
 
 describe("isTorqueChartActive", () => {
   it("shows nothing when no model is active", () => {
@@ -54,5 +54,109 @@ describe("TORQUE_CHART_DEFS", () => {
     for (const perModel of colors) {
       expect(perModel).toEqual(colors[0]);
     }
+  });
+});
+
+describe("buildTorqueChartData", () => {
+  const def = TORQUE_CHART_DEFS[1]; // panel_srp
+  const [xMetric, yMetric, zMetric] = def.series.map((s) => s.metric);
+  const t = new Float64Array([0, 1, 2]);
+
+  function axis(...values: number[]) {
+    return new Float64Array(values);
+  }
+
+  it("plots the three axes of one satellite as three series", () => {
+    const data = buildTorqueChartData(
+      def,
+      {
+        t,
+        [xMetric]: axis(1, 2, 3),
+        [yMetric]: axis(4, 5, 6),
+        [zMetric]: axis(7, 8, 9),
+      },
+      null,
+    );
+
+    expect(data?.series.map((s) => s.label)).toEqual(["x", "y", "z"]);
+    expect(data?.values[2]?.[0]).toBe(7);
+    expect(data?.t).toBe(t);
+  });
+
+  // Two of three axes read as a direction they are not, so the chart is not
+  // drawn at all.
+  it("draws nothing when an axis is missing", () => {
+    const data = buildTorqueChartData(
+      def,
+      { t, [xMetric]: axis(1, 2, 3), [yMetric]: axis(4, 5, 6) },
+      null,
+    );
+
+    expect(data).toBeNull();
+  });
+
+  it("draws nothing when there is no data at all", () => {
+    expect(buildTorqueChartData(def, null, null)).toBeNull();
+    expect(buildTorqueChartData(def, undefined, {})).toBeNull();
+  });
+
+  describe("in a fleet", () => {
+    function multi(axes: Record<string, { t: Float64Array; sats: string[] }>) {
+      const map: Record<string, ReturnType<typeof series> | null> = {};
+      for (const [metric, { t: axisT, sats }] of Object.entries(axes)) {
+        map[metric] = series(axisT, sats);
+      }
+      return map;
+    }
+
+    function series(axisT: Float64Array, sats: string[]) {
+      return {
+        t: axisT,
+        values: sats.map((_, i) => new Float64Array(axisT.length).fill(i + 1)),
+        series: sats.map((label) => ({ label, color: "#fff" })),
+      };
+    }
+
+    it("labels every satellite's axes with its own name", () => {
+      const data = buildTorqueChartData(
+        def,
+        null,
+        multi({
+          [xMetric]: { t, sats: ["sat-a", "sat-b"] },
+          [yMetric]: { t, sats: ["sat-a", "sat-b"] },
+          [zMetric]: { t, sats: ["sat-a", "sat-b"] },
+        }),
+      );
+
+      expect(data?.series.map((s) => s.label)).toEqual([
+        "sat-a x",
+        "sat-b x",
+        "sat-a y",
+        "sat-b y",
+        "sat-a z",
+        "sat-b z",
+      ]);
+    });
+
+    // A chart has one time axis. An axis aligned on a different one would be
+    // drawn against the wrong times, so it is left out instead.
+    it("leaves out an axis aligned on a different time axis", () => {
+      const data = buildTorqueChartData(
+        def,
+        null,
+        multi({
+          [xMetric]: { t, sats: ["sat-a"] },
+          [yMetric]: { t: new Float64Array([0, 1]), sats: ["sat-a"] },
+          [zMetric]: { t, sats: ["sat-a"] },
+        }),
+      );
+
+      expect(data?.series.map((s) => s.label)).toEqual(["sat-a x", "sat-a z"]);
+      expect(data?.t.length).toBe(3);
+    });
+
+    it("draws nothing when the fleet carries none of the axes", () => {
+      expect(buildTorqueChartData(def, { t }, {})).toBeNull();
+    });
   });
 });

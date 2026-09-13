@@ -103,7 +103,7 @@ export function createOrbitSchema(
       { name: "wx", sql: "wx", unit: "rad/s" },
       { name: "wy", sql: "wy", unit: "rad/s" },
       { name: "wz", sql: "wz", unit: "rad/s" },
-      // Per-model torque columns (nullable — a run carries only its own models)
+      // Per-model torque columns (NaN where the run has no such model)
       ...TORQUE_CHART_METRICS.map((metric) => ({
         name: metric,
         sql: metric,
@@ -136,7 +136,11 @@ export function createOrbitSchema(
       p.wx ?? null,
       p.wy ?? null,
       p.wz ?? null,
-      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? null),
+      // NaN, not NULL: `queryDerived` hands the charts what Arrow's `toArray`
+      // returns, and that reads the data buffer without the validity bitmap,
+      // so a NULL double arrives as 0 — a torque measured to be zero rather
+      // than a model the run does not carry. NaN survives as NaN.
+      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? Number.NaN),
     ],
   };
 }

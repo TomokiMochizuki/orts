@@ -157,7 +157,11 @@ test("a chart appears for every model the server reports a torque for", async ({
   // Three series in one chart is what distinguishes a direction from a
   // magnitude, so the legend has to name all three axes.
   const srpChart = page.locator(".uplot", { has: chartTitled(page, "SRP Torque") });
-  const legendLabels = await srpChart.locator(".u-legend .u-series .u-label").allInnerTexts();
+  // The chart is drawn as soon as the run names the model, and its series
+  // appear with the first sample, so wait for the count before reading labels.
+  const legendEntries = srpChart.locator(".u-legend .u-series");
+  await expect(legendEntries).toHaveCount(4, { timeout: 40000 });
+  const legendLabels = await legendEntries.locator(".u-label").allInnerTexts();
   // The first entry labels the x axis (`uPlot` calls it "Value"); the rest are
   // the series, and there must be exactly the three body axes.
   expect(legendLabels.slice(1)).toEqual(["x", "y", "z"]);

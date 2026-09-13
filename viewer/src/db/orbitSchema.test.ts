@@ -38,6 +38,34 @@ describe("createOrbitSchema", () => {
     ]);
   });
 
+  // Arrow's `toArray` reads the data buffer and ignores the validity bitmap,
+  // so a NULL double reaches the chart as 0 — which reads as a torque measured
+  // to be zero rather than a model the run does not carry.
+  it("writes an absent torque as NaN rather than NULL", () => {
+    const point = {
+      t: 0,
+      x: 6778,
+      y: 0,
+      z: 0,
+      vx: 0,
+      vy: 7.669,
+      vz: 0,
+      a: 6778,
+      e: 0.001,
+      inc: 0.9,
+      raan: 3.14,
+      omega: 1.0,
+      nu: 0.5,
+      torque_panel_srp_x: 4e-7,
+    };
+    const row = schema.toRow(point);
+    const names = schema.columns.map((c) => c.name);
+
+    expect(row[names.indexOf("torque_panel_srp_x")]).toBe(4e-7);
+    expect(row[names.indexOf("torque_panel_srp_y")]).toBeNaN();
+    expect(row[names.indexOf("torque_gravity_gradient_x")]).toBeNaN();
+  });
+
   // `buildDerivedQuery` SELECTs only the derived columns, so a column with no
   // pass-through here never reaches a chart however the inserts are written.
   it("exposes every torque column to the query", () => {
