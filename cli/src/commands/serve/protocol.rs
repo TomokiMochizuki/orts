@@ -69,6 +69,11 @@ pub fn variant_envelope_keys(kind: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Server-to-client WebSocket message.
+// `State` is much larger than the other variants, which for an enum held in
+// bulk would waste the difference on every element. This one is built, written
+// to a socket as JSON, and dropped — nothing stores a `WsMessage`, and boxing
+// the payload would put an allocation on the path of every sample instead.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Clone, Debug, TS)]
 #[serde(tag = "type")]
 #[ts(export)]
@@ -110,6 +115,15 @@ pub enum WsMessage {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         #[ts(as = "Option<_>", optional)]
         accelerations: HashMap<String, f64>,
+        /// Per-model body torque [N·m], one entry per model.
+        ///
+        /// Every model appears, including one that only produces an
+        /// acceleration: its entry is a measured zero. A list rather than a map,
+        /// because `Model::name` is not unique. Omitted from the wire when the
+        /// satellite has no models at all.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<_>", optional)]
+        torques: Vec<crate::sim::core::ModelTorque>,
         /// Attitude telemetry (present only when SpacecraftDynamics is used).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -176,7 +190,7 @@ mod tests {
             &vel,
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            crate::sim::core::ModelLoads::default(),
             None,
         )
     }
@@ -421,6 +435,7 @@ mod tests {
             angular_momentum: 51988.882,
             velocity_mag: 7.669,
             accelerations: HashMap::new(),
+            torques: Vec::new(),
             attitude: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -461,6 +476,7 @@ mod tests {
             angular_momentum: 51988.882,
             velocity_mag: 7.669,
             accelerations: HashMap::new(),
+            torques: Vec::new(),
             attitude: Some(AttitudePayload {
                 quaternion_wxyz: [0.707, 0.0, 0.707, 0.0],
                 angular_velocity_body: [0.0, 0.01, 0.0],

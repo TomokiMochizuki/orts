@@ -17,7 +17,7 @@
 //! (integration error, controller fault, stream overflow / stuck peer,
 //! boundary reset) — be unit-tested in-process without a runtime.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -32,8 +32,8 @@ use crate::config::SatelliteConfig;
 use crate::satellite::{SatelliteInfo, SatelliteSpec};
 use crate::sim::controlled::ControlledSatellite;
 use crate::sim::core::{
-    AttitudePayload, AttitudeSource, HistoryState, accel_breakdown, make_history_state, sat_params,
-    spacecraft_accel_breakdown, spacecraft_dynamics_for,
+    AttitudePayload, AttitudeSource, HistoryState, ModelLoads, accel_breakdown, make_history_state,
+    sat_params, spacecraft_dynamics_for, spacecraft_loads,
 };
 use crate::sim::mode::{
     SimMode, ensure_streams_supported, select_sim_mode, unhonored_config_warnings,
@@ -78,7 +78,9 @@ enum SimGroup {
 struct SatSnapshot {
     orbit: OrbitalState,
     attitude: Option<AttitudePayload>,
-    accels: HashMap<String, f64>,
+    /// What every model is doing to this satellite: accelerations per force,
+    /// torques per model.
+    loads: ModelLoads,
 }
 
 impl SimGroup {
@@ -178,7 +180,8 @@ impl SimGroup {
                 SatSnapshot {
                     orbit: entry.state.clone(),
                     attitude: None,
-                    accels: accel_breakdown(dyn_sys, t, &entry.state),
+                    // No attitude to disturb, so no torque to report.
+                    loads: ModelLoads::accelerations(accel_breakdown(dyn_sys, t, &entry.state)),
                 }
             }
             SimGroup::Spacecraft(g) => {
@@ -194,7 +197,7 @@ impl SimGroup {
                         source: AttitudeSource::Propagated,
                         rw_momentum: None,
                     }),
-                    accels: spacecraft_accel_breakdown(dyn_sys, t, sc),
+                    loads: spacecraft_loads(dyn_sys, t, sc),
                 }
             }
             SimGroup::Controlled(sats) => {
@@ -215,7 +218,7 @@ impl SimGroup {
                         source: AttitudeSource::Propagated,
                         rw_momentum: rw_mom,
                     }),
-                    accels: HashMap::new(),
+                    loads: spacecraft_loads(&sat.dynamics, t, sc),
                 }
             }
         }
@@ -575,7 +578,7 @@ impl ServeEngine {
                 snap.orbit.velocity(),
                 params.mu,
                 body_radius,
-                snap.accels.clone(),
+                snap.loads.clone(),
                 snap.attitude.clone(),
             );
             history.push(hs);
@@ -585,7 +588,7 @@ impl ServeEngine {
                 &snap.orbit,
                 params.mu,
                 body_radius,
-                snap.accels,
+                snap.loads,
                 snap.attitude,
             );
             initial_broadcasts.push(msg);
@@ -861,7 +864,7 @@ impl ServeEngine {
                     snap.orbit.velocity(),
                     self.params.mu,
                     body_radius,
-                    snap.accels,
+                    snap.loads,
                     snap.attitude,
                 );
 
@@ -1072,6 +1075,12 @@ impl ServeEngine {
         self.sat_streams.push(Vec::new());
 
         let body_radius = self.params.body.properties().radius;
+        // Through the same snapshot every later sample goes through, so the
+        // first one carries the same breakdowns rather than an empty pair.
+        let loads = self
+            .group
+            .snapshot(self.metas.len() - 1, self.current_t)
+            .loads;
         let hs = make_history_state(
             sat_entity_path.clone(),
             self.current_t,
@@ -1079,7 +1088,7 @@ impl ServeEngine {
             initial.velocity(),
             self.params.mu,
             body_radius,
-            std::collections::HashMap::new(),
+            loads.clone(),
             None,
         );
         self.history.push(hs);
@@ -1089,7 +1098,7 @@ impl ServeEngine {
             &initial,
             self.params.mu,
             body_radius,
-            std::collections::HashMap::new(),
+            loads,
             None,
         );
 
@@ -1180,6 +1189,11 @@ impl ServeEngine {
             None
         };
 
+        // Read before the satellite moves into the group: its first sample
+        // would otherwise report nothing, where every later one carries both
+        // breakdowns.
+        let initial_loads =
+            spacecraft_loads(&new_sat.dynamics, self.current_t, &new_sat.state.plant);
         self.group.push_controlled_satellite(new_sat);
 
         let sat_info = SatelliteInfo {
@@ -1216,7 +1230,7 @@ impl ServeEngine {
             initial.velocity(),
             self.params.mu,
             body_radius,
-            std::collections::HashMap::new(),
+            initial_loads.clone(),
             Some(attitude_payload.clone()),
         );
         self.history.push(hs);
@@ -1226,7 +1240,7 @@ impl ServeEngine {
             &initial,
             self.params.mu,
             body_radius,
-            std::collections::HashMap::new(),
+            initial_loads,
             Some(attitude_payload),
         );
 
@@ -1500,6 +1514,17 @@ orbit = { type = "circular", altitude = 50 }
                 .broadcasts
                 .iter()
                 .any(|m| m.contains("satellite_added"))
+        );
+
+        // That first state carries the same acceleration breakdown every later
+        // sample does. It is built outside `snapshot`, so it is the sample that
+        // would go out empty.
+        let first: serde_json::Value =
+            serde_json::from_str(&added.broadcasts[0]).expect("the first broadcast is JSON");
+        assert_eq!(first["type"], "state");
+        assert!(
+            first["accelerations"]["gravity"].is_number(),
+            "the add-time state should report its accelerations: {first}"
         );
     }
 
@@ -1837,7 +1862,7 @@ cp_offset = [0.0, 1.5, 0.0]
             .satellites_with_dynamics()
             .next()
             .expect("one satellite");
-        let accels = spacecraft_accel_breakdown(dynamics, 0.0, &entry.state.plant);
+        let accels = spacecraft_loads(dynamics, 0.0, &entry.state.plant).accelerations;
 
         assert!(accels.contains_key("srp"), "keys: {:?}", accels.keys());
         assert!(accels.contains_key("drag"), "keys: {:?}", accels.keys());
@@ -1845,6 +1870,153 @@ cp_offset = [0.0, 1.5, 0.0]
             !accels.contains_key("panel_srp") && !accels.contains_key("panel_drag"),
             "the model names should not reach the wire: {:?}",
             accels.keys()
+        );
+    }
+
+    /// The snapshot every live message and history point is built from carries
+    /// a torque per model, keyed by the model's own name rather than by the
+    /// force channel the accelerations use.
+    ///
+    /// Both go through `snapshot`, so this is what decides whether the viewer
+    /// can see an attitude disturbance at all.
+    #[test]
+    fn a_snapshot_carries_a_torque_per_model() {
+        // `diag(10, 40, 45)` turned 45 degrees about y in a 400 km orbit, the
+        // arrangement `run`'s own test derives `|tau_y| = 6.7e-5 N.m` for. The
+        // panel fixture starts aligned with the orbital frame, where the
+        // gravity-gradient torque vanishes, and carries no epoch, where the
+        // panel models report nothing.
+        const TILTED: &str = r#"
+epoch = "2026-03-03T00:00:00Z"
+
+[[satellites]]
+id = "sat-a"
+orbit = { type = "circular", altitude = 400 }
+
+[satellites.attitude]
+inertia_diag = [10.0, 40.0, 45.0]
+mass = 500
+initial_quaternion = [0.9238795325112867, 0.0, 0.3826834323650898, 0.0]
+
+[[satellites.panels]]
+area = 2.0
+normal = [1.0, 0.0, 0.0]
+cd = 2.2
+cp_offset = [0.0, 0.0, 1.5]
+"#;
+        let init = engine_from_toml(TILTED).expect("engine builds");
+        let snap = init.engine.group.snapshot(0, 0.0);
+
+        let models: Vec<&str> = snap
+            .loads
+            .torques
+            .iter()
+            .map(|t| t.model.as_str())
+            .collect();
+        for model in ["gravity_gradient", "panel_srp", "panel_drag"] {
+            assert!(
+                models.contains(&model),
+                "{model} should report its torque: {models:?}"
+            );
+        }
+        assert!(
+            snap.loads
+                .torques
+                .iter()
+                .any(|t| t.torque_body_nm.iter().any(|c| *c != 0.0)),
+            "an off-centre panel fleet should produce some torque: {:?}",
+            snap.loads.torques
+        );
+        // The accelerations keep their force-channel names beside it.
+        assert!(snap.loads.accelerations.contains_key("srp"));
+    }
+
+    /// A controlled satellite reports both breakdowns.
+    ///
+    /// The controlled arm of `snapshot` is its own code path, and it reported
+    /// an empty acceleration map before this: the spacecraft arm's test says
+    /// nothing about it. Built here rather than through a config, because a
+    /// controlled satellite needs a plugin guest that a unit test cannot build.
+    #[test]
+    fn a_controlled_satellite_reports_both_breakdowns() {
+        use crate::sim::controlled::ControlledSatellite;
+        use orts::plugin::{Command, PluginController, PluginError, TickInput};
+        use orts::spacecraft::SpacecraftState;
+
+        struct Idle;
+        impl PluginController for Idle {
+            fn name(&self) -> &str {
+                "idle"
+            }
+            fn sample_period(&self) -> f64 {
+                1.0
+            }
+            fn update(&mut self, _input: &TickInput<'_>) -> Result<Option<Command>, PluginError> {
+                Ok(None)
+            }
+        }
+
+        let body = arika::body::KnownBody::Earth;
+        let mu = body.properties().mu;
+        let inertia = nalgebra::Matrix3::from_diagonal(&nalgebra::Vector3::new(10.0, 40.0, 45.0));
+        let dynamics = orts::setup::build_spacecraft_dynamics(
+            &body,
+            mu,
+            None,
+            &orts::setup::SatelliteParams {
+                has_drag: false,
+                ballistic_coeff: None,
+                srp_area_to_mass: None,
+                srp_cr: None,
+                disturbances: orts::setup::DisturbanceTorques::default(),
+                shape: None,
+            },
+            &[],
+            inertia,
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
+
+        let r = body.properties().radius + 400.0;
+        let v = (mu / r).sqrt();
+        // Turned 45 degrees about y, where the gravity-gradient torque is
+        // largest for this inertia; aligned with the orbital frame it vanishes.
+        let plant = SpacecraftState {
+            orbit: orts::orbital::OrbitalState::new(
+                nalgebra::Vector3::new(r, 0.0, 0.0),
+                nalgebra::Vector3::new(0.0, v, 0.0),
+            ),
+            attitude: orts::attitude::AttitudeState {
+                quaternion: nalgebra::Vector4::new(
+                    0.9238795325112867,
+                    0.0,
+                    0.3826834323650898,
+                    0.0,
+                ),
+                angular_velocity: nalgebra::Vector3::zeros(),
+            },
+            mass: 500.0,
+        };
+        let state = dynamics.initial_augmented_state(plant);
+        let sat = ControlledSatellite::for_test(dynamics, state, Box::new(Idle), body);
+        // Through `SimGroup::Controlled`'s own snapshot arm, which is the one
+        // that used to report an empty pair for every controlled satellite.
+        let loads = SimGroup::Controlled(vec![sat]).snapshot(0, 0.0).loads;
+
+        assert!(
+            loads.accelerations.contains_key("gravity"),
+            "a controlled satellite reports its accelerations: {:?}",
+            loads.accelerations.keys()
+        );
+        let gg = loads
+            .torques
+            .iter()
+            .find(|t| t.model == "gravity_gradient")
+            .expect("the gravity-gradient torque is reported");
+        assert!(
+            gg.torque_body_nm[1].abs() > 1e-9,
+            "the torque should be the measured one, got {:?}",
+            gg.torque_body_nm
         );
     }
 

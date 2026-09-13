@@ -14,6 +14,17 @@ section is subdivided by package.
 ### `orts` (Rust, crates.io)
 
 #### Added
+- `SpacecraftDynamics::load_breakdown` answers the acceleration magnitudes and
+  the body torques from one evaluation of every model, as a `LoadBreakdown`
+  re-exported from `orts::spacecraft`. `ExternalLoads` carries
+  both, so a caller that wants both — telemetry reporting one sample — had no
+  reason to evaluate every model twice, which for a 22-panel spacecraft is
+  50 µs of shadow geometry each time. The one-sided accessors stay as they
+  were, each projecting what its caller asked for from `model_breakdown`:
+  going through `load_breakdown` would build the half that caller discards, and
+  a torque-only call — every `orts run` output sample — has no use for the
+  gravity field either.
+  ([#470](https://github.com/sksat/orts/pull/470))
 - `orts::eclipse` holds the bodies that can block the Sun, so more than the
   central one can: `OccultingBody` carries a body's position, radius and shadow
   geometry, `default_occulters` gives the set for a central body, and
@@ -555,6 +566,23 @@ section is subdivided by package.
   no error to the client. ([#351](https://github.com/sksat/orts/pull/351))
 
 #### Added
+- `orts serve` sends the body torque of every model on the wire, as
+  `torques: [{ model, torque_body_nm }]` beside `accelerations`, and keeps it
+  through the history segments so a replayed window reads the same as a live
+  one. A list rather than a map because `Model::name` is not unique: two models
+  of one spacecraft can answer the same name, and a map would carry whichever
+  came last. The name is the model's own, where `accelerations` renames a panel
+  model to the force it computes — a torque is reported per model, and which
+  model produced it is what a reader is checking.
+
+  A controlled satellite now reports its accelerations too, where it reported
+  none, and a satellite added at run time reports both breakdowns from its
+  first sample rather than from its second — the controlled one from its
+  dynamics before it moves into the group, the orbit-only one through the same
+  snapshot every later sample goes through. An `.rrd` played back through `orts replay`
+  carries no torque yet: `RrdRow` does not decode the per-model columns
+  `orts run` writes, and the replay advertises no perturbations, so the charts
+  would stay hidden even if it did. ([#470](https://github.com/sksat/orts/pull/470))
 - `orts run` writes the disturbance torque of every model to the CSV and the
   `.rrd`, one column per model — `gravity_gradient.torque_body_x_Nm` and so on,
   in the body frame [N·m]. Until now nothing torque-related left the library, so

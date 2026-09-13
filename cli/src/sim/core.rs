@@ -35,6 +35,25 @@ pub struct AttitudePayload {
     pub rw_momentum: Option<Vec<f64>>,
 }
 
+/// One model's torque on the body [N·m].
+///
+/// A list rather than a map keyed by name, because
+/// [`Model::name`](orts::model::Model::name) is not unique: two models of one
+/// spacecraft can answer the same name, and a map would keep whichever came
+/// last. The order is the order the models are evaluated in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export)]
+pub struct ModelTorque {
+    /// The model's own name, as `Model::name` gives it.
+    ///
+    /// Not renamed the way `accelerations` renames a panel model to the force
+    /// it computes: a torque is reported per model, and which model produced it
+    /// is the thing a reader is checking.
+    pub model: String,
+    /// Torque in the body frame [N·m].
+    pub torque_body_nm: [f64; 3],
+}
+
 /// How the attitude data was produced.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export)]
@@ -87,10 +106,44 @@ pub struct HistoryState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[ts(as = "Option<_>", optional)]
     pub accelerations: HashMap<String, f64>,
+    /// Per-model body torque [N·m], one entry per model.
+    ///
+    /// Every model appears, including one that only produces an acceleration:
+    /// its entry is a measured zero, which is what a reader checking whether a
+    /// disturbance is acting needs to see. Empty means the satellite has no
+    /// models at all — an orbit-only satellite, or a sample taken before any
+    /// were evaluated — and is omitted from the wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<_>", optional)]
+    pub torques: Vec<ModelTorque>,
     /// Attitude telemetry (present only when SpacecraftDynamics is used).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub attitude: Option<AttitudePayload>,
+}
+
+/// What every model is doing to a spacecraft at one sample.
+///
+/// The two breakdowns travel together because they are read together and are
+/// filled from the same dynamics: `accelerations` is a channel per physical
+/// force, `torques` an entry per model. Bundling them keeps the constructors
+/// below from growing another positional argument.
+#[derive(Default, Clone, Debug)]
+pub struct ModelLoads {
+    /// Per-force acceleration magnitudes [km/s²].
+    pub accelerations: HashMap<String, f64>,
+    /// Per-model body torque [N·m].
+    pub torques: Vec<ModelTorque>,
+}
+
+impl ModelLoads {
+    /// Accelerations alone, for a satellite with no attitude to disturb.
+    pub fn accelerations(accelerations: HashMap<String, f64>) -> Self {
+        Self {
+            accelerations,
+            torques: Vec::new(),
+        }
+    }
 }
 
 /// Create a HistoryState from position/velocity, computing Keplerian elements and derived values.
@@ -102,9 +155,13 @@ pub fn make_history_state(
     vel: &nalgebra::Vector3<f64>,
     mu: f64,
     body_radius: f64,
-    accelerations: HashMap<String, f64>,
+    loads: ModelLoads,
     attitude: Option<AttitudePayload>,
 ) -> HistoryState {
+    let ModelLoads {
+        accelerations,
+        torques,
+    } = loads;
     let elements = KeplerianElements::from_state_vector(pos, vel, mu);
     let r_mag = pos.magnitude();
     let v_mag = vel.magnitude();
@@ -125,6 +182,7 @@ pub fn make_history_state(
         angular_momentum: h.magnitude(),
         velocity_mag: v_mag,
         accelerations,
+        torques,
         attitude,
     }
 }
@@ -162,20 +220,35 @@ pub fn accel_breakdown(
         .collect()
 }
 
-/// Compute acceleration breakdown from a SpacecraftDynamics system.
+/// Both breakdowns for the wire, from one evaluation of every model.
 ///
-/// Uses [`SpacecraftDynamics::acceleration_breakdown`], mirroring
-/// the output format of [`accel_breakdown`] for protocol compatibility.
-pub fn spacecraft_accel_breakdown(
+/// Telemetry reports them at one sample, and evaluating every model twice for
+/// that would double the panel models' shadow geometry, which is most of their
+/// cost.
+pub fn spacecraft_loads(
     dynamics: &orts::spacecraft::SpacecraftDynamics<Box<dyn orts::orbital::gravity::GravityField>>,
     t: f64,
     state: &orts::spacecraft::SpacecraftState,
-) -> HashMap<String, f64> {
-    dynamics
-        .acceleration_breakdown(t, state)
-        .into_iter()
-        .map(|(name, mag)| (force_channel(name).to_string(), mag))
-        .collect()
+) -> ModelLoads {
+    let breakdown = dynamics.load_breakdown(t, state);
+    ModelLoads {
+        accelerations: breakdown
+            .accelerations
+            .into_iter()
+            .map(|(name, mag)| (force_channel(name).to_string(), mag))
+            .collect(),
+        torques: breakdown
+            .torques
+            .into_iter()
+            .map(|(model, torque)| {
+                let torque = torque.into_inner();
+                ModelTorque {
+                    model: model.to_string(),
+                    torque_body_nm: [torque.x, torque.y, torque.z],
+                }
+            })
+            .collect(),
+    }
 }
 
 /// Report a panel model under the name of the force it computes.
@@ -252,7 +325,7 @@ mod tests {
             &nalgebra::Vector3::new(0.0, 7.669, 0.0),
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             None,
         );
         assert_eq!(hs.entity_path, EntityPath::parse("/world/sat/test-sat"));
@@ -269,7 +342,7 @@ mod tests {
             &nalgebra::Vector3::new(0.0, 7.669, 0.0),
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             None,
         );
         let json = serde_json::to_string(&hs).unwrap();
@@ -312,7 +385,7 @@ mod tests {
             &nalgebra::Vector3::new(0.0, 7.669, 0.0),
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             attitude,
         );
         assert!(hs.attitude.is_some());
@@ -327,7 +400,7 @@ mod tests {
             &nalgebra::Vector3::new(0.0, 7.669, 0.0),
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             Some(AttitudePayload {
                 quaternion_wxyz: [0.707, 0.0, 0.707, 0.0],
                 angular_velocity_body: [0.0, 0.1, 0.0],
@@ -347,5 +420,69 @@ mod tests {
         let payload: AttitudePayload = serde_json::from_str(json).unwrap();
         assert_eq!(payload.quaternion_wxyz, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(payload.source, AttitudeSource::Propagated);
+    }
+
+    /// The torque list travels as a list, because `Model::name` is not unique:
+    /// two models answering one name would collapse into a single entry in a
+    /// map, and the second one's torque would be the only one to arrive.
+    #[test]
+    fn two_models_of_one_name_both_reach_the_wire() {
+        let state = HistoryState {
+            torques: vec![
+                ModelTorque {
+                    model: "thruster".to_string(),
+                    torque_body_nm: [1.0, 0.0, 0.0],
+                },
+                ModelTorque {
+                    model: "thruster".to_string(),
+                    torque_body_nm: [0.0, 2.0, 0.0],
+                },
+            ],
+            ..make_history_state(
+                EntityPath::parse("/world/sat/two"),
+                0.0,
+                &nalgebra::Vector3::new(6778.0, 0.0, 0.0),
+                &nalgebra::Vector3::new(0.0, 7.669, 0.0),
+                TEST_MU,
+                TEST_BODY_RADIUS,
+                ModelLoads::default(),
+                None,
+            )
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let back: HistoryState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.torques.len(), 2, "both entries survive: {json}");
+        assert_eq!(back.torques[1].torque_body_nm, [0.0, 2.0, 0.0]);
+    }
+
+    /// A sample with no torque leaves the field off the wire, so a reader can
+    /// tell "no model produces one" from a measured zero.
+    #[test]
+    fn a_sample_without_torque_omits_the_field() {
+        let state = make_history_state(
+            EntityPath::parse("/world/sat/quiet"),
+            0.0,
+            &nalgebra::Vector3::new(6778.0, 0.0, 0.0),
+            &nalgebra::Vector3::new(0.0, 7.669, 0.0),
+            TEST_MU,
+            TEST_BODY_RADIUS,
+            ModelLoads::default(),
+            None,
+        );
+        let json = serde_json::to_string(&state).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("torques").is_none(), "{json}");
+
+        // And a zero torque a model did report is on the wire as zero.
+        let measured = HistoryState {
+            torques: vec![ModelTorque {
+                model: "gravity_gradient".to_string(),
+                torque_body_nm: [0.0, 0.0, 0.0],
+            }],
+            ..state
+        };
+        let json = serde_json::to_string(&measured).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["torques"][0]["model"], "gravity_gradient");
     }
 }

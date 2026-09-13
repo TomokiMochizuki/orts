@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use orts::OrbitalState;
 use orts::orbital::kepler::KeplerianElements;
 use orts::record::entity_path::EntityPath;
 
 use crate::commands::serve::protocol::WsMessage;
-use crate::sim::core::AttitudePayload;
+use crate::sim::core::{AttitudePayload, ModelLoads};
 
 /// Pre-computed derived values for chart display.
 pub struct DerivedValues {
@@ -39,9 +37,13 @@ pub fn state_message(
     state: &OrbitalState,
     mu: f64,
     body_radius: f64,
-    accelerations: HashMap<String, f64>,
+    loads: ModelLoads,
     attitude: Option<AttitudePayload>,
 ) -> String {
+    let ModelLoads {
+        accelerations,
+        torques,
+    } = loads;
     let elements = KeplerianElements::from_state_vector(state.position(), state.velocity(), mu);
     let derived = compute_derived(state.position(), state.velocity(), mu, body_radius);
     let msg = WsMessage::State {
@@ -60,6 +62,7 @@ pub fn state_message(
         angular_momentum: derived.angular_momentum,
         velocity_mag: derived.velocity_mag,
         accelerations,
+        torques,
         attitude,
     };
     serde_json::to_string(&msg).expect("failed to serialize state message")

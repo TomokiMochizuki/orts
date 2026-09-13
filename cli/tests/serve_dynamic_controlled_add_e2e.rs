@@ -265,8 +265,24 @@ async fn serve_dynamic_controlled_add_succeeds() {
             .await
             .expect("failed to send add_satellite");
 
-        // Expect a satellite_added response referencing the new sat.
-        let added = read_until_type(&mut read, "satellite_added", 400).await;
+        // Expect a satellite_added response referencing the new sat, keeping the
+        // new satellite's own state message on the way: the add broadcasts
+        // `[state, added]` in that order, and that state is the one built
+        // outside `snapshot` — the sample a regression would empty.
+        let mut added: Option<serde_json::Value> = None;
+        let mut add_time_state: Option<serde_json::Value> = None;
+        for _ in 0..400 {
+            let msg = next_json(&mut read).await;
+            if msg["type"] == "state" && msg["entity_path"] == "/world/sat/dynamic-sat" {
+                add_time_state.get_or_insert(msg);
+                continue;
+            }
+            if msg["type"] == "satellite_added" {
+                added = Some(msg);
+                break;
+            }
+        }
+        let added = added.expect("did not receive message type 'satellite_added'");
         assert_eq!(
             added["satellite"]["id"], "/world/sat/dynamic-sat",
             "added satellite id mismatch"
@@ -276,18 +292,23 @@ async fn serve_dynamic_controlled_add_succeeds() {
             "added satellite must report a time"
         );
 
-        // The new satellite should start producing state messages.
-        let mut saw_dynamic_state = false;
-        for _ in 0..400 {
-            let msg = next_json(&mut read).await;
-            if msg["type"] == "state" && msg["entity_path"] == "/world/sat/dynamic-sat" {
-                saw_dynamic_state = true;
-                break;
-            }
-        }
+        // The new satellite's first state message — the one the add itself
+        // broadcast — carries what every later one does: the acceleration
+        // breakdown and a torque per model.
+        let first_state = add_time_state
+            .expect("should receive state messages for the dynamically added controlled satellite");
         assert!(
-            saw_dynamic_state,
-            "should receive state messages for the dynamically added controlled satellite"
+            first_state["accelerations"]["gravity"].as_f64().is_some(),
+            "the first sample should carry the acceleration breakdown: {first_state}"
+        );
+        let torques = first_state["torques"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the first sample should carry torques: {first_state}"));
+        assert!(
+            torques
+                .iter()
+                .any(|t| t["model"] == "gravity_gradient" && t["torque_body_nm"].is_array()),
+            "a torque per model, the gravity gradient among them: {first_state}"
         );
     })
     .await;
