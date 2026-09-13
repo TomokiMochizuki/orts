@@ -181,6 +181,12 @@ sequenceDiagram
   レンダ経路に乗っていない。
 - **History path (cold):** `IngestBuffer` → DuckDB が zoom / downsample /
   事後クエリ用のキャッシュ。ring buffer と eventually consistent。
+- **チャートの列は経路ごとに宣言する:** live の ring buffer は登録された列だけを
+  copy し、DuckDB 経路は列そのもの・クエリが select する `derived` の
+  pass-through・insert 1 行あたりの値を要求する。どれか 1 つで欠けると
+  エラーにならず空のチャートになるため、チャートの metric を足すときは全部に足す。
+  値が無い場合は `NULL` でなく `NaN` を書く。Arrow の `toArray` は validity
+  bitmap を見ずに data buffer を読むので、null の double は 0 として届く。
 - **Source 抽象:** 全入力が同じ `SourceEvent` ストリームに正規化されるため、
   live と replay は単一パイプラインを通る。live WebSocket 経路は
   `useWebSocket` hook のブリッジ (`useWebSocketSource`)、ファイル再生
