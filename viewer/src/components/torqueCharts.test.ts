@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TORQUE_AXES, TORQUE_CHART_METRICS } from "../chartMetrics.js";
+import { TORQUE_AXES, TORQUE_CHART_METRICS, TORQUE_CHART_MODELS } from "../chartMetrics.js";
 import { buildTorqueChartData, isTorqueChartActive, TORQUE_CHART_DEFS } from "./torqueCharts.js";
 
 describe("isTorqueChartActive", () => {
@@ -40,6 +40,15 @@ describe("TORQUE_CHART_DEFS", () => {
 
   // A def naming a column no query selects draws an empty chart, so the names
   // have to be the ones `METRIC_NAMES` carries into the store.
+  // The metric names and the parser are generated from `TORQUE_CHART_MODELS`,
+  // so a chart for a model outside that list would name columns nobody writes.
+  it("charts exactly the models the store knows", () => {
+    expect(TORQUE_CHART_DEFS.map((d) => d.model)).toEqual([...TORQUE_CHART_MODELS]);
+    for (const def of TORQUE_CHART_DEFS) {
+      expect(def.title, `"${def.model}" needs a title`).toBeTruthy();
+    }
+  });
+
   it("names only metrics the store queries", () => {
     for (const def of TORQUE_CHART_DEFS) {
       for (const series of def.series) {
@@ -138,9 +147,25 @@ describe("buildTorqueChartData", () => {
       ]);
     });
 
+    // Equal sample counts do not make the times equal, and the type carries
+    // no promise that they are, so the values decide.
+    it("leaves out an axis sampled at different times", () => {
+      const data = buildTorqueChartData(
+        def,
+        null,
+        multi({
+          [xMetric]: { t, sats: ["sat-a"] },
+          [yMetric]: { t: new Float64Array([0, 1, 9]), sats: ["sat-a"] },
+          [zMetric]: { t, sats: ["sat-a"] },
+        }),
+      );
+
+      expect(data?.series.map((s) => s.label)).toEqual(["sat-a x", "sat-a z"]);
+    });
+
     // A chart has one time axis. An axis aligned on a different one would be
     // drawn against the wrong times, so it is left out instead.
-    it("leaves out an axis aligned on a different time axis", () => {
+    it("leaves out an axis with a different number of samples", () => {
       const data = buildTorqueChartData(
         def,
         null,

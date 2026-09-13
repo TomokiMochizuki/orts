@@ -9,7 +9,7 @@
  */
 
 import type { ChartDataMap } from "@sksat/uneri";
-import { TORQUE_AXES } from "../chartMetrics.js";
+import { TORQUE_AXES, TORQUE_CHART_MODELS, type TorqueChartModel } from "../chartMetrics.js";
 import type { MultiChartDataMap, MultiSeriesData } from "../hooks/buildMultiChartData.js";
 
 /** One axis of one model's torque, as a chart series. */
@@ -24,7 +24,7 @@ export interface TorqueSeries {
 /** One chart: a model, and its three components as series. */
 export interface TorqueChartDef {
   /** `Model::name`, as the wire reports it. */
-  model: string;
+  model: TorqueChartModel;
   title: string;
   /** Y-axis unit label. */
   yLabel: string;
@@ -35,13 +35,19 @@ export interface TorqueChartDef {
 /** Colours for the three axes, held apart so every torque chart agrees. */
 export const TORQUE_AXIS_COLORS = ["#f66", "#6f6", "#6af"];
 
-export const TORQUE_CHART_DEFS: TorqueChartDef[] = [
-  { model: "gravity_gradient", title: "Gravity-gradient Torque" },
-  { model: "panel_srp", title: "SRP Torque" },
-  { model: "panel_drag", title: "Aerodynamic Torque" },
-].map(({ model, title }) => ({
+/** The chart title for each model. Typed over `TORQUE_CHART_MODELS`, so a
+ * model added there without a title here is a compile error rather than a
+ * chart that never appears — the metric names and the parser are generated
+ * from that same list. */
+const TORQUE_CHART_TITLES: Record<TorqueChartModel, string> = {
+  gravity_gradient: "Gravity-gradient Torque",
+  panel_srp: "SRP Torque",
+  panel_drag: "Aerodynamic Torque",
+};
+
+export const TORQUE_CHART_DEFS: TorqueChartDef[] = TORQUE_CHART_MODELS.map((model) => ({
   model,
-  title,
+  title: TORQUE_CHART_TITLES[model],
   yLabel: "N\u00B7m",
   series: TORQUE_AXES.map((axis, i) => ({
     metric: `torque_${model}_${axis}`,
@@ -65,6 +71,16 @@ export function isTorqueChartActive(
   return activePerturbations.includes(model);
 }
 
+/** Whether two aligned axes carry the same times. */
+function sameTimes(a: Float64Array, b: Float64Array): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Assemble one model's chart: its three axes as series on one time axis.
  *
  * In a fleet the series dimension is already the satellites, so each
@@ -85,9 +101,10 @@ export function buildTorqueChartData(
     const values: Float64Array[] = [];
     const series: { label: string; color: string }[] = [];
     perAxis.forEach((axisData, i) => {
-      // One chart, one time axis: an axis aligned on a different one would be
-      // drawn against the wrong times.
-      if (!axisData || axisData.t.length !== t.length) return;
+      // One chart, one time axis: an axis aligned on different times would be
+      // drawn against these ones. Equal sample counts do not make the times
+      // equal, so the values are compared.
+      if (!axisData || !sameTimes(axisData.t, t)) return;
       axisData.values.forEach((satValues, sat) => {
         values.push(satValues);
         series.push({

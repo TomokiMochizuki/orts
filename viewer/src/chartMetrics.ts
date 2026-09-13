@@ -21,7 +21,10 @@ export const ACCEL_CHART_METRICS = [
 ];
 
 /** The models whose torque the viewer charts, in the order the charts appear. */
-export const TORQUE_CHART_MODELS = ["gravity_gradient", "panel_srp", "panel_drag"];
+export const TORQUE_CHART_MODELS = ["gravity_gradient", "panel_srp", "panel_drag"] as const;
+
+/** One of the models the viewer charts a torque for. */
+export type TorqueChartModel = (typeof TORQUE_CHART_MODELS)[number];
 
 /** The three axes of a body-frame torque, in the order they are plotted. */
 export const TORQUE_AXES = ["x", "y", "z"];
