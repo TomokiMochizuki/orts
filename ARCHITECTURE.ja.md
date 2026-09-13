@@ -185,8 +185,9 @@ sequenceDiagram
   copy し、DuckDB 経路は列そのもの・クエリが select する `derived` の
   pass-through・insert 1 行あたりの値を要求する。どれか 1 つで欠けると
   エラーにならず空のチャートになるため、チャートの metric を足すときは全部に足す。
-  値が無い場合は `NULL` でなく `NaN` を書く。Arrow の `toArray` は validity
-  bitmap を見ずに data buffer を読むので、null の double は 0 として届く。
+  値が無いことがある列は、クエリ側で NaN を要求する (`COALESCE(col, 'NaN'::DOUBLE)`)。
+  store が渡す `Float64Array` で NULL の double が何になるかは Arrow の export の
+  実装次第で、そこが 0 だと測定値として読まれてしまう。
 - **Source 抽象:** 全入力が同じ `SourceEvent` ストリームに正規化されるため、
   live と replay は単一パイプラインを通る。live WebSocket 経路は
   `useWebSocket` hook のブリッジ (`useWebSocketSource`)、ファイル再生

@@ -38,10 +38,10 @@ describe("createOrbitSchema", () => {
     ]);
   });
 
-  // Arrow's `toArray` reads the data buffer and ignores the validity bitmap,
-  // so a NULL double reaches the chart as 0 — which reads as a torque measured
-  // to be zero rather than a model the run does not carry.
-  it("writes an absent torque as NaN rather than NULL", () => {
+  // An absent model is a gap, not a torque measured to be zero, and `toRow`
+  // cannot say so on its own: `buildInsertSQLFromRows` writes every non-finite
+  // value as SQL NULL, so NaN and null reach the table identically.
+  it("leaves an absent torque unset in the row", () => {
     const point = {
       t: 0,
       x: 6778,
@@ -62,8 +62,22 @@ describe("createOrbitSchema", () => {
     const names = schema.columns.map((c) => c.name);
 
     expect(row[names.indexOf("torque_panel_srp_x")]).toBe(4e-7);
-    expect(row[names.indexOf("torque_panel_srp_y")]).toBeNaN();
-    expect(row[names.indexOf("torque_gravity_gradient_x")]).toBeNaN();
+    expect(row[names.indexOf("torque_panel_srp_y")]).toBeNull();
+    expect(row[names.indexOf("torque_gravity_gradient_x")]).toBeNull();
+  });
+
+  // Which is why the gap is asked for in the query instead. Measured against
+  // duckdb-wasm through the same `getChildAt(i).toArray()` the store uses:
+  // `SELECT v` gives [1.5, NaN, 3.5] for a column holding NULL, and
+  // `COALESCE(v,'NaN'::DOUBLE)` gives the same — but the first relies on how
+  // Arrow's export materialises a null, and the second states it.
+  it("asks the query for NaN where a torque column is NULL", () => {
+    for (const metric of TORQUE_CHART_METRICS) {
+      const derived = schema.derived.find((d) => d.name === metric);
+      expect(derived?.sql, `"${metric}" should coalesce`).toBe(
+        `COALESCE(${metric}, 'NaN'::DOUBLE)`,
+      );
+    }
   });
 
   // `buildDerivedQuery` SELECTs only the derived columns, so a column with no

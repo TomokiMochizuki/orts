@@ -103,10 +103,13 @@ export function createOrbitSchema(
       { name: "wx", sql: "wx", unit: "rad/s" },
       { name: "wy", sql: "wy", unit: "rad/s" },
       { name: "wz", sql: "wz", unit: "rad/s" },
-      // Per-model torque columns (NaN where the run has no such model)
+      // Per-model torque columns. A run carries only its own models, and a
+      // model it does not carry has to read as a gap rather than as a torque
+      // measured to be zero, so the query asks for NaN explicitly: what a
+      // NULL double becomes in a `Float64Array` is a detail of Arrow's export.
       ...TORQUE_CHART_METRICS.map((metric) => ({
         name: metric,
-        sql: metric,
+        sql: `COALESCE(${metric}, 'NaN'::DOUBLE)`,
         unit: "N\u00B7m",
       })),
     ],
@@ -136,11 +139,11 @@ export function createOrbitSchema(
       p.wx ?? null,
       p.wy ?? null,
       p.wz ?? null,
-      // NaN, not NULL: `queryDerived` hands the charts what Arrow's `toArray`
-      // returns, and that reads the data buffer without the validity bitmap,
-      // so a NULL double arrives as 0 — a torque measured to be zero rather
-      // than a model the run does not carry. NaN survives as NaN.
-      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? Number.NaN),
+      // `null` for a model this run does not carry, as the attitude columns
+      // do. `buildInsertSQLFromRows` writes any non-finite value as SQL NULL
+      // anyway, so NaN here would reach the table as the same thing; the
+      // derived query is where the gap is made explicit.
+      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? null),
     ],
   };
 }
