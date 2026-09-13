@@ -17,10 +17,12 @@ altitude: number, specific_energy: number, angular_momentum: number, velocity_ma
  */
 accelerations?: { [key in string]: number }, 
 /**
- * Per-model body torque [N·m], one entry per model that produces one.
+ * Per-model body torque [N·m], one entry per model.
  *
- * A list rather than a map: `Model::name` is not unique. Omitted from
- * the wire when empty.
+ * Every model appears, a model that only produces an acceleration
+ * included: its entry is a measured zero. A list rather than a map,
+ * because `Model::name` is not unique. Omitted from the wire when the
+ * satellite has no models at all.
  */
 torques?: Array<ModelTorque>, 
 /**

@@ -42,6 +42,19 @@ pub struct SpacecraftDynamics<G: GravityField, F: Eci = SimpleEci> {
     _frame: PhantomData<F>,
 }
 
+/// What every model is doing to a spacecraft at one state.
+///
+/// Answered by [`SpacecraftDynamics::load_breakdown`] from a single evaluation
+/// of every model, for a caller that wants both halves — telemetry reporting
+/// one sample.
+pub struct LoadBreakdown<'a> {
+    /// Acceleration magnitudes [km/s²], with the gravity field first and then
+    /// one entry per model.
+    pub accelerations: Vec<(&'a str, f64)>,
+    /// Body-frame torques [N·m], one entry per model.
+    pub torques: Vec<(&'a str, arika::frame::Vec3<arika::frame::Body>)>,
+}
+
 impl<G: GravityField, F: Eci + 'static> SpacecraftDynamics<G, F> {
     /// Create with gravitational parameter, gravity model, and inertia tensor.
     ///
@@ -259,16 +272,10 @@ impl<G: GravityField, F: Eci + 'static> SpacecraftDynamics<G, F> {
     ///
     /// The two halves are what
     /// [`acceleration_breakdown`](Self::acceleration_breakdown) and
-    /// [`torque_breakdown`](Self::torque_breakdown) answer, and both are
-    /// written in terms of this.
-    pub fn load_breakdown(
-        &self,
-        t: f64,
-        state: &SpacecraftState<F>,
-    ) -> (
-        Vec<(&str, f64)>,
-        Vec<(&str, arika::frame::Vec3<arika::frame::Body>)>,
-    ) {
+    /// [`torque_breakdown`](Self::torque_breakdown) answer. Each of those
+    /// projects from `model_breakdown` on its own, so a caller wanting one half
+    /// does not build the other; this exists for the caller wanting both.
+    pub fn load_breakdown(&self, t: f64, state: &SpacecraftState<F>) -> LoadBreakdown<'_> {
         let grav = self
             .gravity
             .acceleration(self.mu, state.orbit.position())
@@ -281,12 +288,26 @@ impl<G: GravityField, F: Eci + 'static> SpacecraftDynamics<G, F> {
             accelerations.push((name, loads.acceleration_inertial.magnitude()));
             torques.push((name, loads.torque_body));
         }
-        (accelerations, torques)
+        LoadBreakdown {
+            accelerations,
+            torques,
+        }
     }
 
     /// Acceleration breakdown for telemetry.
     pub fn acceleration_breakdown(&self, t: f64, state: &SpacecraftState<F>) -> Vec<(&str, f64)> {
-        self.load_breakdown(t, state).0
+        // Projected here rather than through
+        // [`load_breakdown`](Self::load_breakdown), which would build a vector
+        // of every model's torque for this caller to drop.
+        let grav = self
+            .gravity
+            .acceleration(self.mu, state.orbit.position())
+            .magnitude();
+        let mut result = vec![("gravity", grav)];
+        for (name, loads) in self.model_breakdown(t, state) {
+            result.push((name, loads.acceleration_inertial.magnitude()));
+        }
+        result
     }
 }
 
@@ -1225,7 +1246,10 @@ mod tests {
             });
         let state = sample_spacecraft();
 
-        let (accelerations, torques) = dynamics.load_breakdown(0.0, &state);
+        let LoadBreakdown {
+            accelerations,
+            torques,
+        } = dynamics.load_breakdown(0.0, &state);
         assert_eq!(
             calls.load(Ordering::Relaxed),
             1,
@@ -1236,7 +1260,8 @@ mod tests {
         assert_eq!(torques[0].1.into_inner(), Vector3::new(0.0, 1.0, 0.0));
 
         // And the two single-sided accessors give the same answers, each for
-        // one evaluation of its own.
+        // one evaluation of its own — and without building the half its caller
+        // did not ask for.
         calls.store(0, Ordering::Relaxed);
         let separate = dynamics.acceleration_breakdown(0.0, &state);
         assert_eq!(separate, accelerations);

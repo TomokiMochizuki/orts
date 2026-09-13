@@ -276,18 +276,33 @@ async fn serve_dynamic_controlled_add_succeeds() {
             "added satellite must report a time"
         );
 
-        // The new satellite should start producing state messages.
-        let mut saw_dynamic_state = false;
+        // The new satellite should start producing state messages, and its
+        // first one should carry what every later one does: the acceleration
+        // breakdown and a torque per model. The satellite's initial state is
+        // built outside `snapshot`, so this is the sample that would go out
+        // empty.
+        let mut first_state: Option<serde_json::Value> = None;
         for _ in 0..400 {
             let msg = next_json(&mut read).await;
             if msg["type"] == "state" && msg["entity_path"] == "/world/sat/dynamic-sat" {
-                saw_dynamic_state = true;
+                first_state = Some(msg);
                 break;
             }
         }
+        let first_state = first_state
+            .expect("should receive state messages for the dynamically added controlled satellite");
         assert!(
-            saw_dynamic_state,
-            "should receive state messages for the dynamically added controlled satellite"
+            first_state["accelerations"]["gravity"].as_f64().is_some(),
+            "the first sample should carry the acceleration breakdown: {first_state}"
+        );
+        let torques = first_state["torques"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the first sample should carry torques: {first_state}"));
+        assert!(
+            torques
+                .iter()
+                .any(|t| t["model"] == "gravity_gradient" && t["torque_body_nm"].is_array()),
+            "a torque per model, the gravity gradient among them: {first_state}"
         );
     })
     .await;

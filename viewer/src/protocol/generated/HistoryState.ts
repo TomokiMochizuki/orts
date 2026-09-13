@@ -16,8 +16,13 @@ altitude: number, specific_energy: number, angular_momentum: number, velocity_ma
  */
 accelerations?: { [key in string]: number }, 
 /**
- * Per-model body torque [N·m]. Empty unless the satellite carries models
- * that produce one. Omitted from the wire when empty.
+ * Per-model body torque [N·m], one entry per model.
+ *
+ * Every model appears, including one that only produces an acceleration:
+ * its entry is a measured zero, which is what a reader checking whether a
+ * disturbance is acting needs to see. Empty means the satellite has no
+ * models at all — an orbit-only satellite, or a sample taken before any
+ * were evaluated — and is omitted from the wire.
  */
 torques?: Array<ModelTorque>, 
 /**

@@ -106,8 +106,13 @@ pub struct HistoryState {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[ts(as = "Option<_>", optional)]
     pub accelerations: HashMap<String, f64>,
-    /// Per-model body torque [N·m]. Empty unless the satellite carries models
-    /// that produce one. Omitted from the wire when empty.
+    /// Per-model body torque [N·m], one entry per model.
+    ///
+    /// Every model appears, including one that only produces an acceleration:
+    /// its entry is a measured zero, which is what a reader checking whether a
+    /// disturbance is acting needs to see. Empty means the satellite has no
+    /// models at all — an orbit-only satellite, or a sample taken before any
+    /// were evaluated — and is omitted from the wire.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<_>", optional)]
     pub torques: Vec<ModelTorque>,
@@ -215,22 +220,6 @@ pub fn accel_breakdown(
         .collect()
 }
 
-/// Compute acceleration breakdown from a SpacecraftDynamics system.
-///
-/// Uses [`SpacecraftDynamics::acceleration_breakdown`], mirroring
-/// the output format of [`accel_breakdown`] for protocol compatibility.
-pub fn spacecraft_accel_breakdown(
-    dynamics: &orts::spacecraft::SpacecraftDynamics<Box<dyn orts::orbital::gravity::GravityField>>,
-    t: f64,
-    state: &orts::spacecraft::SpacecraftState,
-) -> HashMap<String, f64> {
-    dynamics
-        .acceleration_breakdown(t, state)
-        .into_iter()
-        .map(|(name, mag)| (force_channel(name).to_string(), mag))
-        .collect()
-}
-
 /// Both breakdowns for the wire, from one evaluation of every model.
 ///
 /// Telemetry reports them at one sample, and evaluating every model twice for
@@ -241,13 +230,15 @@ pub fn spacecraft_loads(
     t: f64,
     state: &orts::spacecraft::SpacecraftState,
 ) -> ModelLoads {
-    let (accelerations, torques) = dynamics.load_breakdown(t, state);
+    let breakdown = dynamics.load_breakdown(t, state);
     ModelLoads {
-        accelerations: accelerations
+        accelerations: breakdown
+            .accelerations
             .into_iter()
             .map(|(name, mag)| (force_channel(name).to_string(), mag))
             .collect(),
-        torques: torques
+        torques: breakdown
+            .torques
             .into_iter()
             .map(|(model, torque)| {
                 let torque = torque.into_inner();

@@ -573,8 +573,10 @@ section is subdivided by package.
   model produced it is what a reader is checking.
 
   A controlled satellite now reports its accelerations too, where it reported
-  none, and a satellite added at run time reports both from its first sample
-  rather than from its second. An `.rrd` played back through `orts replay`
+  none, and a satellite added at run time reports both breakdowns from its
+  first sample rather than from its second — the controlled one from its
+  dynamics before it moves into the group, the orbit-only one through the same
+  snapshot every later sample goes through. An `.rrd` played back through `orts replay`
   carries no torque yet: `RrdRow` does not decode the per-model columns
   `orts run` writes, and the replay advertises no perturbations, so the charts
   would stay hidden even if it did. ([#470](https://github.com/sksat/orts/pull/470))

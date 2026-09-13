@@ -1075,6 +1075,12 @@ impl ServeEngine {
         self.sat_streams.push(Vec::new());
 
         let body_radius = self.params.body.properties().radius;
+        // Through the same snapshot every later sample goes through, so the
+        // first one carries the same breakdowns rather than an empty pair.
+        let loads = self
+            .group
+            .snapshot(self.metas.len() - 1, self.current_t)
+            .loads;
         let hs = make_history_state(
             sat_entity_path.clone(),
             self.current_t,
@@ -1082,10 +1088,7 @@ impl ServeEngine {
             initial.velocity(),
             self.params.mu,
             body_radius,
-            // An orbit-only satellite has no attitude to disturb, and this
-            // path reported no accelerations before either; the next tick
-            // fills both from `snapshot`.
-            ModelLoads::default(),
+            loads.clone(),
             None,
         );
         self.history.push(hs);
@@ -1095,10 +1098,7 @@ impl ServeEngine {
             &initial,
             self.params.mu,
             body_radius,
-            // An orbit-only satellite has no attitude to disturb, and this
-            // path reported no accelerations before either; the next tick
-            // fills both from `snapshot`.
-            ModelLoads::default(),
+            loads,
             None,
         );
 
@@ -1851,8 +1851,7 @@ cp_offset = [0.0, 1.5, 0.0]
             .satellites_with_dynamics()
             .next()
             .expect("one satellite");
-        let accels =
-            crate::sim::core::spacecraft_accel_breakdown(dynamics, 0.0, &entry.state.plant);
+        let accels = spacecraft_loads(dynamics, 0.0, &entry.state.plant).accelerations;
 
         assert!(accels.contains_key("srp"), "keys: {:?}", accels.keys());
         assert!(accels.contains_key("drag"), "keys: {:?}", accels.keys());
@@ -1919,6 +1918,93 @@ cp_offset = [0.0, 0.0, 1.5]
         );
         // The accelerations keep their force-channel names beside it.
         assert!(snap.loads.accelerations.contains_key("srp"));
+    }
+
+    /// A controlled satellite reports both breakdowns.
+    ///
+    /// The controlled arm of `snapshot` is its own code path, and it reported
+    /// an empty acceleration map before this: the spacecraft arm's test says
+    /// nothing about it. Built here rather than through a config, because a
+    /// controlled satellite needs a plugin guest that a unit test cannot build.
+    #[test]
+    fn a_controlled_satellite_reports_both_breakdowns() {
+        use crate::sim::controlled::ControlledSatellite;
+        use orts::plugin::{Command, PluginController, PluginError, TickInput};
+        use orts::spacecraft::SpacecraftState;
+
+        struct Idle;
+        impl PluginController for Idle {
+            fn name(&self) -> &str {
+                "idle"
+            }
+            fn sample_period(&self) -> f64 {
+                1.0
+            }
+            fn update(&mut self, _input: &TickInput<'_>) -> Result<Option<Command>, PluginError> {
+                Ok(None)
+            }
+        }
+
+        let body = arika::body::KnownBody::Earth;
+        let mu = body.properties().mu;
+        let inertia = nalgebra::Matrix3::from_diagonal(&nalgebra::Vector3::new(10.0, 40.0, 45.0));
+        let dynamics = orts::setup::build_spacecraft_dynamics(
+            &body,
+            mu,
+            None,
+            &orts::setup::SatelliteParams {
+                has_drag: false,
+                ballistic_coeff: None,
+                srp_area_to_mass: None,
+                srp_cr: None,
+                disturbances: orts::setup::DisturbanceTorques::default(),
+                shape: None,
+            },
+            &[],
+            inertia,
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
+
+        let r = body.properties().radius + 400.0;
+        let v = (mu / r).sqrt();
+        // Turned 45 degrees about y, where the gravity-gradient torque is
+        // largest for this inertia; aligned with the orbital frame it vanishes.
+        let plant = SpacecraftState {
+            orbit: orts::orbital::OrbitalState::new(
+                nalgebra::Vector3::new(r, 0.0, 0.0),
+                nalgebra::Vector3::new(0.0, v, 0.0),
+            ),
+            attitude: orts::attitude::AttitudeState {
+                quaternion: nalgebra::Vector4::new(
+                    0.9238795325112867,
+                    0.0,
+                    0.3826834323650898,
+                    0.0,
+                ),
+                angular_velocity: nalgebra::Vector3::zeros(),
+            },
+            mass: 500.0,
+        };
+        let state = dynamics.initial_augmented_state(plant);
+        let sat = ControlledSatellite::for_test(dynamics, state, Box::new(Idle), body);
+        let loads = spacecraft_loads(&sat.dynamics, 0.0, &sat.state.plant);
+
+        assert!(
+            loads.accelerations.contains_key("gravity"),
+            "a controlled satellite reports its accelerations: {:?}",
+            loads.accelerations.keys()
+        );
+        let gg = loads
+            .torques
+            .iter()
+            .find(|t| t.model == "gravity_gradient")
+            .expect("the gravity-gradient torque is reported");
+        assert!(
+            gg.torque_body_nm[1].abs() > 1e-9,
+            "the torque should be the measured one, got {:?}",
+            gg.torque_body_nm
+        );
     }
 
     /// Turning the torque off in config has to reach the dynamics the

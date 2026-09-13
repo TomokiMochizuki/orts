@@ -473,7 +473,9 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   値で、どのモデルが出したかが読み手の確認したいことである。
 
   controlled の衛星は加速度も報告するようになった (これまでは何も報告していなかった)。実行中に
-  追加した衛星も、2 つ目のサンプルからではなく最初のサンプルから両方を報告する。`orts replay`
+  追加した衛星も、2 つ目のサンプルからではなく最初のサンプルから両方を報告する。controlled は
+  group に move する前に自分の dynamics から、orbit-only は以降のサンプルと同じ snapshot から
+  読む。`orts replay`
   で `.rrd` を再生した場合のトルクはまだ無い。`RrdRow` が `orts run` の書くモデルごとの列を
   読まず、再生は perturbations を空で通知するので、値があってもチャートが出ない。
   ([#470](https://github.com/sksat/orts/pull/470))

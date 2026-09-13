@@ -69,6 +69,11 @@ pub fn variant_envelope_keys(kind: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Server-to-client WebSocket message.
+// `State` is much larger than the other variants, which for an enum held in
+// bulk would waste the difference on every element. This one is built, written
+// to a socket as JSON, and dropped — nothing stores a `WsMessage`, and boxing
+// the payload would put an allocation on the path of every sample instead.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Clone, Debug, TS)]
 #[serde(tag = "type")]
 #[ts(export)]
@@ -110,10 +115,12 @@ pub enum WsMessage {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         #[ts(as = "Option<_>", optional)]
         accelerations: HashMap<String, f64>,
-        /// Per-model body torque [N·m], one entry per model that produces one.
+        /// Per-model body torque [N·m], one entry per model.
         ///
-        /// A list rather than a map: `Model::name` is not unique. Omitted from
-        /// the wire when empty.
+        /// Every model appears, a model that only produces an acceleration
+        /// included: its entry is a measured zero. A list rather than a map,
+        /// because `Model::name` is not unique. Omitted from the wire when the
+        /// satellite has no models at all.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[ts(as = "Option<_>", optional)]
         torques: Vec<crate::sim::core::ModelTorque>,
