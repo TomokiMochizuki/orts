@@ -382,6 +382,16 @@ export function useSimulationData(options: UseSimulationDataOptions): Simulation
   // 4. Non-live / fallback → DuckDB useTimeSeriesStore
   const visibleChartData = liveChartData ?? localZoomData ?? duckdbChartData;
 
+  // The same for one satellite: what the charts render, after the live buffer
+  // or DuckDB has answered. A test can read a column's values here, where the
+  // chart component draws its title and legend whether or not any value
+  // arrived.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__debug_chart_data = visibleChartData;
+    }
+  }, [visibleChartData]);
+
   const resetZoomState = useCallback(() => {
     lastSentRangeRef.current = null;
     latestRequestedRangeRef.current = null;

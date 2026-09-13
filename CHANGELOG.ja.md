@@ -1045,6 +1045,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `uneri` (npm: `@sksat/uneri`)
 
 #### Added
+- `TimeSeriesChart` に `spanGaps` を追加（既定 `true`、従来の挙動）。multi-series の
+  データは、ある系列に sample が無く別の系列にはある時刻で gap を持つので、そこを線で
+  つなぐのが正しい。gap が「その時刻に値が存在しない」を意味する呼び出し側（実行が持たない
+  モデルの列など）は `false` を渡し、線を切って、計算されていない値を描かないようにする。
+  ([#471](https://github.com/sksat/orts/pull/471))
 - Worker message `update-schema` / `multi-update-schema` と
   `ChartDataWorkerClient.updateSchema()` / `MultiChartDataWorkerClient.updateSchema()`
   を追加。init 後の schema 変更が Worker に届く。([#341](https://github.com/sksat/orts/pull/341))

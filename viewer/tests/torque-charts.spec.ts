@@ -154,6 +154,39 @@ test("a chart appears for every model the server reports a torque for", async ({
   await expect(chartTitled(page, "Gravity-gradient Torque")).toBeVisible();
   await expect(chartTitled(page, "Aerodynamic Torque")).toBeVisible();
 
+  // The values have to arrive, not just the chart: `TimeSeriesChart` draws its
+  // title and legend from the series configuration, so an all-gap chart looks
+  // the same. These numbers come from the `orts serve` started above, through
+  // the wire, `parseTorques`, the chart row and the live buffer.
+  const columns = await page.waitForFunction(
+    () => {
+      const data = (window as unknown as Record<string, unknown>).__debug_chart_data as Record<
+        string,
+        Float64Array
+      > | null;
+      if (!data) return null;
+      const gg = data.torque_gravity_gradient_y;
+      const srp = data.torque_panel_srp_x;
+      if (!gg || !srp) return null;
+      const finite = (v: Float64Array) => Array.from(v).filter((x) => Number.isFinite(x));
+      const ggFinite = finite(gg);
+      const srpFinite = finite(srp);
+      if (ggFinite.length === 0 || srpFinite.length === 0) return null;
+      return {
+        gravityGradientMax: Math.max(...ggFinite.map(Math.abs)),
+        srpMax: Math.max(...srpFinite.map(Math.abs)),
+        ggSamples: ggFinite.length,
+      };
+    },
+    { timeout: 40000 },
+  );
+  const measured = await columns.jsonValue();
+  console.log("torque columns:", JSON.stringify(measured));
+  // A 45-degree tilt of `diag(10, 40, 45)` at 400 km produces about 6.7e-5 N·m
+  // about y; the panel's SRP torque is orders smaller but not zero.
+  expect(measured.gravityGradientMax).toBeGreaterThan(1e-5);
+  expect(measured.srpMax).toBeGreaterThan(0);
+
   // Three series in one chart is what distinguishes a direction from a
   // magnitude, so the legend has to name all three axes.
   const srpChart = page.locator(".uplot", { has: chartTitled(page, "SRP Torque") });

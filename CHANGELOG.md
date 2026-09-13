@@ -1228,6 +1228,13 @@ section is subdivided by package.
 ### `uneri` (npm: `@sksat/uneri`)
 
 #### Added
+- `TimeSeriesChart` takes `spanGaps` (default `true`, the behaviour it had).
+  Multi-series data carries a gap wherever one series has no sample at an
+  instant another one does, and a line drawn across that gap is right. A
+  caller whose gaps mean no value exists there — a column for a model the run
+  does not carry — passes `false`, and the line breaks instead of stating a
+  value that was never computed.
+  ([#471](https://github.com/sksat/orts/pull/471))
 - `update-schema` / `multi-update-schema` Worker messages and
   `ChartDataWorkerClient.updateSchema()` / `MultiChartDataWorkerClient.updateSchema()`,
   so a schema change reaches the Worker after it was initialized. ([#341](https://github.com/sksat/orts/pull/341))

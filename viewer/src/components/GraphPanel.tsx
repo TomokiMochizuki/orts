@@ -131,6 +131,10 @@ export const GraphPanel = memo(function GraphPanel({
               yLabel={def.yLabel}
               multiData={torqueData[def.model]}
               onZoom={onZoom}
+              // A gap here is a sample with no such model, not a sample that
+              // landed between another satellite's: drawing across it would
+              // state a torque that was never computed.
+              spanGaps={false}
             />
           ))}
         </div>
