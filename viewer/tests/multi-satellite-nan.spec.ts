@@ -38,6 +38,7 @@
 import type { AddressInfo } from "node:net";
 import { expect, test } from "@playwright/test";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
+import { TORQUE_CHART_METRICS } from "../src/chartMetrics.js";
 
 /** Build a state message for a circular orbit. */
 function stateMsg(entityPath: string, t: number, altitude: number) {
@@ -271,11 +272,24 @@ test.describe("multi-satellite NaN alignment", () => {
       expect(m.tLen, `${m.name}: aligned t should not exceed the downsample cap`).toBeLessThan(
         2500,
       );
+      // These satellites are orbit-only, so no model reports a torque and
+      // every torque sample is a gap by construction. That is the column
+      // saying "this run has no such model", which is what distinguishes it
+      // from a torque measured to be zero — a different thing from the
+      // alignment padding the budget below is about.
+      const isTorque = TORQUE_CHART_METRICS.includes(m.name);
       for (let i = 0; i < m.seriesLengths.length; i++) {
         expect(
           m.seriesLengths[i],
           `${m.name}: series ${i} length must equal t length (alignment invariant)`,
         ).toBe(m.tLen);
+        if (isTorque) {
+          expect(
+            m.nanPerSeries[i],
+            `${m.name}: series ${i} should be all gaps, this run has no torque model`,
+          ).toBe(m.tLen);
+          continue;
+        }
         // Allow a very small slack for edge alignment effects (≤ 2
         // unmatched points). A broken per-sat-tMax regression would
         // produce dozens to hundreds of NaNs because each sat's
