@@ -14,7 +14,7 @@ use orts::record::rerun_export::load_rrd_data;
 
 use crate::commands::serve::protocol::{ClientMessage, WsMessage};
 use crate::satellite::SatelliteInfo;
-use crate::sim::core::{HistoryState, downsample_states, make_history_state};
+use crate::sim::core::{HistoryState, ModelLoads, downsample_states, make_history_state};
 
 /// Pre-loaded replay data shared across connections.
 struct ReplayData {
@@ -80,7 +80,11 @@ fn load_replay_data(path: &str) -> ReplayData {
             &vel,
             mu,
             body_radius,
-            HashMap::new(),
+            // An `.rrd` carries the per-model torque columns `orts run` writes,
+            // but `RrdRow` does not decode them and the replay advertises no
+            // perturbations, so the charts would stay hidden even if it did.
+            // Tracked separately; a file without them reads as no torque.
+            ModelLoads::accelerations(HashMap::new()),
             attitude,
         );
 
@@ -373,7 +377,7 @@ mod tests {
             &nalgebra::Vector3::new(0.0, 7.669, 0.0),
             398600.4418,
             6378.137,
-            HashMap::new(),
+            ModelLoads::default(),
             None,
         )
     }

@@ -348,6 +348,7 @@ fn state_json(out: &crate::sim::core::HistoryState) -> String {
         angular_momentum: out.angular_momentum,
         velocity_mag: out.velocity_mag,
         accelerations: out.accelerations.clone(),
+        torques: out.torques.clone(),
         attitude: out.attitude.clone(),
     })
     .expect("failed to serialize state")

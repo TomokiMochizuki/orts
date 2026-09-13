@@ -239,23 +239,54 @@ impl<G: GravityField, F: Eci + 'static> SpacecraftDynamics<G, F> {
         t: f64,
         state: &SpacecraftState<F>,
     ) -> Vec<(&str, arika::frame::Vec3<arika::frame::Body>)> {
+        // Straight from the models, without the gravity field
+        // [`load_breakdown`](Self::load_breakdown) needs: a torque-only caller
+        // — every `orts run` output sample is one — has no use for it, and a
+        // substituted `GravityField` can be expensive.
         self.model_breakdown(t, state)
             .into_iter()
             .map(|(name, loads)| (name, loads.torque_body))
             .collect()
     }
 
-    /// Acceleration breakdown for telemetry.
-    pub fn acceleration_breakdown(&self, t: f64, state: &SpacecraftState<F>) -> Vec<(&str, f64)> {
+    /// Both breakdowns from one evaluation of every model.
+    ///
+    /// `ExternalLoads` carries the acceleration and the torque together, so a
+    /// caller that wants both — telemetry reporting one sample — has no reason
+    /// to evaluate every model twice. The panel models make that visible: the
+    /// shadow geometry is most of their cost, and a 22-panel spacecraft is
+    /// 50 µs an evaluation.
+    ///
+    /// The two halves are what
+    /// [`acceleration_breakdown`](Self::acceleration_breakdown) and
+    /// [`torque_breakdown`](Self::torque_breakdown) answer, and both are
+    /// written in terms of this.
+    pub fn load_breakdown(
+        &self,
+        t: f64,
+        state: &SpacecraftState<F>,
+    ) -> (
+        Vec<(&str, f64)>,
+        Vec<(&str, arika::frame::Vec3<arika::frame::Body>)>,
+    ) {
         let grav = self
             .gravity
             .acceleration(self.mu, state.orbit.position())
             .magnitude();
-        let mut result = vec![("gravity", grav)];
-        for (name, loads) in self.model_breakdown(t, state) {
-            result.push((name, loads.acceleration_inertial.magnitude()));
+        let breakdown = self.model_breakdown(t, state);
+        let mut accelerations = Vec::with_capacity(breakdown.len() + 1);
+        accelerations.push(("gravity", grav));
+        let mut torques = Vec::with_capacity(breakdown.len());
+        for (name, loads) in breakdown {
+            accelerations.push((name, loads.acceleration_inertial.magnitude()));
+            torques.push((name, loads.torque_body));
         }
-        result
+        (accelerations, torques)
+    }
+
+    /// Acceleration breakdown for telemetry.
+    pub fn acceleration_breakdown(&self, t: f64, state: &SpacecraftState<F>) -> Vec<(&str, f64)> {
+        self.load_breakdown(t, state).0
     }
 }
 
@@ -1156,5 +1187,65 @@ mod tests {
             torque.iter().map(|(name, _)| *name).collect::<Vec<_>>()
         );
         assert_eq!(torque[0].0, "only_model");
+    }
+
+    /// Both breakdowns come from one evaluation of every model, which is what
+    /// telemetry reporting a sample needs: the panel models' shadow geometry is
+    /// most of their cost, and evaluating them twice for one sample doubles it.
+    ///
+    /// Counted rather than argued: the model records how often it is asked.
+    #[test]
+    fn one_evaluation_answers_both_breakdowns() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counting {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl Model<SpacecraftState> for Counting {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            fn eval(
+                &self,
+                _t: f64,
+                _state: &SpacecraftState,
+                _epoch: Option<&Epoch>,
+            ) -> ExternalLoads {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                ExternalLoads::torque(Vector3::new(0.0, 1.0, 0.0))
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dynamics = SpacecraftDynamics::new(MU_EARTH, PointMass, symmetric_inertia(10.0))
+            .with_model(Counting {
+                calls: Arc::clone(&calls),
+            });
+        let state = sample_spacecraft();
+
+        let (accelerations, torques) = dynamics.load_breakdown(0.0, &state);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "one evaluation for both halves"
+        );
+        assert_eq!(accelerations.len(), 2, "gravity leads, then the model");
+        assert_eq!(torques.len(), 1);
+        assert_eq!(torques[0].1.into_inner(), Vector3::new(0.0, 1.0, 0.0));
+
+        // And the two single-sided accessors give the same answers, each for
+        // one evaluation of its own.
+        calls.store(0, Ordering::Relaxed);
+        let separate = dynamics.acceleration_breakdown(0.0, &state);
+        assert_eq!(separate, accelerations);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        calls.store(0, Ordering::Relaxed);
+        let separate = dynamics.torque_breakdown(0.0, &state);
+        assert_eq!(separate.len(), 1);
+        assert_eq!(separate[0].1.into_inner(), Vector3::new(0.0, 1.0, 0.0));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }

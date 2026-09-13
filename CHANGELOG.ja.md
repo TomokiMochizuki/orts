@@ -11,6 +11,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `orts` (Rust, crates.io)
 
 #### Added
+- `SpacecraftDynamics::load_breakdown` を追加。加速度の magnitude と body torque を、
+  全モデル 1 回の評価から返す。`ExternalLoads` が両方を持っているので、両方を欲しい
+  呼び出し側 (1 サンプルを報告する telemetry) が全モデルを 2 回評価する理由はない。
+  パネル 22 枚の機体では 1 回 50 µs の影の幾何を二重に払っていた。
+  `acceleration_breakdown` はこれで書き直した。`torque_breakdown` は `model_breakdown`
+  直のままにする。トルクだけを問う呼び出し側に重力場の評価は要らない。
+  ([#470](https://github.com/sksat/orts/pull/470))
 - `orts::eclipse` を追加。太陽を遮る天体を一覧で持ち、中心天体以外も遮蔽体になれるようにした。
   `OccultingBody` が天体の位置・半径・遮蔽の幾何を持ち、`default_occulters` が中心天体ごとの
   標準の一覧を返し、`illumination` が力モデルやセンサが使う 1 つの照射率にまとめる。これで
@@ -458,6 +465,18 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   client への error も無い状態になっていた。([#351](https://github.com/sksat/orts/pull/351))
 
 #### Added
+- `orts serve` が、モデルごとの body torque を wire に載せるようになった。`accelerations` の
+  隣に `torques: [{ model, torque_body_nm }]` として送り、history segment にも保存するので、
+  再生した区間も live と同じものが読める。map ではなく list なのは `Model::name` が一意でない
+  ためで、同名を答えるモデルが 2 つあると map は後のものだけを残す。名前はモデル自身のもので、
+  `accelerations` がパネルモデルを力の名前に読み替えるのとは違う。トルクはモデルごとに報告する
+  値で、どのモデルが出したかが読み手の確認したいことである。
+
+  controlled の衛星は加速度も報告するようになった (これまでは何も報告していなかった)。実行中に
+  追加した衛星も、2 つ目のサンプルからではなく最初のサンプルから両方を報告する。`orts replay`
+  で `.rrd` を再生した場合のトルクはまだ無い。`RrdRow` が `orts run` の書くモデルごとの列を
+  読まず、再生は perturbations を空で通知するので、値があってもチャートが出ない。
+  ([#470](https://github.com/sksat/orts/pull/470))
 - `orts run` が、モデルごとの外乱トルクを CSV と `.rrd` に出すようになった。1 モデル 1 列で
   `gravity_gradient.torque_body_x_Nm` のような列名になり、値は機体座標系 [N·m]。これまでは
   トルクに関する値が library から出ていなかったので、パネルモデルが出す SRP と空力の

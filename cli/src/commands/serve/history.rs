@@ -7,7 +7,9 @@ use orts::record::entity_path::EntityPath;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::sim::core::{AttitudePayload, AttitudeSource, HistoryState, make_history_state};
+use crate::sim::core::{
+    AttitudePayload, AttitudeSource, HistoryState, ModelLoads, ModelTorque, make_history_state,
+};
 
 /// Maximum number of overview points retained per satellite (entity path).
 ///
@@ -455,8 +457,24 @@ struct SegmentRecord {
     velocity: [F64; 3],
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     accelerations: HashMap<String, F64>,
+    /// Per-model body torque [N·m].
+    ///
+    /// Defaulted, so a segment written before this field existed reads as a
+    /// sample with no torque rather than failing. `F64` for the same reason the
+    /// rest of this record uses it: these files keep non-finite values as they
+    /// were measured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    torques: Vec<SegmentTorque>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attitude: Option<SegmentAttitude>,
+}
+
+/// One model's torque as stored: `F64` like the rest of this record, so a
+/// non-finite value comes back as it was measured.
+#[derive(Serialize, Deserialize)]
+struct SegmentTorque {
+    model: String,
+    torque_body_nm: [F64; 3],
 }
 
 #[derive(Serialize, Deserialize)]
@@ -480,6 +498,14 @@ impl SegmentRecord {
                 .iter()
                 .map(|(k, v)| (k.clone(), F64(*v)))
                 .collect(),
+            torques: hs
+                .torques
+                .iter()
+                .map(|t| SegmentTorque {
+                    model: t.model.clone(),
+                    torque_body_nm: t.torque_body_nm.map(F64),
+                })
+                .collect(),
             attitude: hs.attitude.as_ref().map(|att| SegmentAttitude {
                 quaternion_wxyz: att.quaternion_wxyz.map(F64),
                 angular_velocity_body: att.angular_velocity_body.map(F64),
@@ -502,10 +528,21 @@ impl SegmentRecord {
             &nalgebra::Vector3::from_row_slice(&velocity),
             mu,
             body_radius,
-            self.accelerations
-                .into_iter()
-                .map(|(k, v)| (k, v.0))
-                .collect(),
+            ModelLoads {
+                accelerations: self
+                    .accelerations
+                    .into_iter()
+                    .map(|(k, v)| (k, v.0))
+                    .collect(),
+                torques: self
+                    .torques
+                    .into_iter()
+                    .map(|t| ModelTorque {
+                        model: t.model,
+                        torque_body_nm: t.torque_body_nm.map(|f| f.0),
+                    })
+                    .collect(),
+            },
             self.attitude.map(|att| AttitudePayload {
                 quaternion_wxyz: att.quaternion_wxyz.map(|f| f.0),
                 angular_velocity_body: att.angular_velocity_body.map(|f| f.0),
@@ -564,7 +601,7 @@ mod tests {
             &vel,
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             None,
         )
     }
@@ -677,7 +714,7 @@ mod tests {
             &vel,
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            ModelLoads::default(),
             None,
         )
     }
@@ -1741,7 +1778,7 @@ mod tests {
                 &vel,
                 TEST_MU,
                 TEST_BODY_RADIUS,
-                HashMap::new(),
+                ModelLoads::default(),
                 attitude,
             );
             buf.push(hs);
@@ -1782,7 +1819,7 @@ mod tests {
             &vel,
             TEST_MU,
             TEST_BODY_RADIUS,
-            accels,
+            ModelLoads::accelerations(accels),
             Some(AttitudePayload {
                 quaternion_wxyz: [0.5, 0.5, 0.5, 0.5],
                 angular_velocity_body: [0.01, -0.02, 0.03 + t * 1e-6],
@@ -1940,7 +1977,7 @@ mod tests {
                 &vel,
                 TEST_MU,
                 TEST_BODY_RADIUS,
-                accels,
+                ModelLoads::accelerations(accels),
                 Some(AttitudePayload {
                     quaternion_wxyz: [f64::NAN, 0.0, 0.0, 0.0],
                     angular_velocity_body: [f64::INFINITY, 0.0, 0.0],
@@ -2166,5 +2203,62 @@ mod tests {
         );
 
         std::fs::remove_file(&dir).ok();
+    }
+
+    /// A segment carries the per-model torques, non-finite values included, and
+    /// a segment written before the field existed still loads.
+    #[test]
+    fn a_segment_round_trips_the_per_model_torques() {
+        let hs = HistoryState {
+            torques: vec![
+                ModelTorque {
+                    model: "gravity_gradient".to_string(),
+                    torque_body_nm: [1.5e-5, -2.0e-6, 0.0],
+                },
+                ModelTorque {
+                    model: "panel_srp".to_string(),
+                    torque_body_nm: [f64::NAN, f64::INFINITY, f64::NEG_INFINITY],
+                },
+            ],
+            ..make_history_state(
+                EntityPath::parse("/world/sat/seg"),
+                12.0,
+                &nalgebra::Vector3::new(6778.0, 0.0, 0.0),
+                &nalgebra::Vector3::new(0.0, 7.669, 0.0),
+                TEST_MU,
+                TEST_BODY_RADIUS,
+                ModelLoads::default(),
+                None,
+            )
+        };
+
+        let line = serde_json::to_string(&SegmentRecord::from_state(&hs)).expect("write");
+        let back: SegmentRecord = serde_json::from_str(&line).expect("read");
+        let back = back.into_state(TEST_MU, TEST_BODY_RADIUS);
+        assert_eq!(back.torques.len(), 2);
+        assert_eq!(back.torques[0].model, "gravity_gradient");
+        assert_eq!(back.torques[0].torque_body_nm[0], 1.5e-5);
+        assert!(back.torques[1].torque_body_nm[0].is_nan());
+        assert_eq!(back.torques[1].torque_body_nm[1], f64::INFINITY);
+        assert_eq!(back.torques[1].torque_body_nm[2], f64::NEG_INFINITY);
+
+        // A record from before the field existed: take this one's line and
+        // drop the key, which is what such a file holds. Built from a real
+        // line rather than by hand, because `F64` encodes a float as a string
+        // to keep the non-finite ones.
+        let mut older: serde_json::Value = serde_json::from_str(&line).expect("read as a value");
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("torques")
+            .expect("the line carried torques");
+        let record: SegmentRecord =
+            serde_json::from_str(&older.to_string()).expect("an older record still reads");
+        assert!(
+            record
+                .into_state(TEST_MU, TEST_BODY_RADIUS)
+                .torques
+                .is_empty()
+        );
     }
 }

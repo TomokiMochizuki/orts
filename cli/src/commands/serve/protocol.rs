@@ -110,6 +110,13 @@ pub enum WsMessage {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         #[ts(as = "Option<_>", optional)]
         accelerations: HashMap<String, f64>,
+        /// Per-model body torque [N·m], one entry per model that produces one.
+        ///
+        /// A list rather than a map: `Model::name` is not unique. Omitted from
+        /// the wire when empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<_>", optional)]
+        torques: Vec<crate::sim::core::ModelTorque>,
         /// Attitude telemetry (present only when SpacecraftDynamics is used).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -176,7 +183,7 @@ mod tests {
             &vel,
             TEST_MU,
             TEST_BODY_RADIUS,
-            HashMap::new(),
+            crate::sim::core::ModelLoads::default(),
             None,
         )
     }
@@ -421,6 +428,7 @@ mod tests {
             angular_momentum: 51988.882,
             velocity_mag: 7.669,
             accelerations: HashMap::new(),
+            torques: Vec::new(),
             attitude: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -461,6 +469,7 @@ mod tests {
             angular_momentum: 51988.882,
             velocity_mag: 7.669,
             accelerations: HashMap::new(),
+            torques: Vec::new(),
             attitude: Some(AttitudePayload {
                 quaternion_wxyz: [0.707, 0.0, 0.707, 0.0],
                 angular_velocity_body: [0.0, 0.01, 0.0],
