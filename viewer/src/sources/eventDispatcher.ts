@@ -8,7 +8,8 @@
  * to React state after each event.
  */
 
-import type { OrbitPoint } from "../orbit.js";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
+import { type OrbitPoint, torqueComponent } from "../orbit.js";
 import type { TrailBuffer } from "../utils/TrailBuffer.js";
 import type { SimInfo, SourceConnectionState, SourceEvent, SourceId } from "./types.js";
 
@@ -37,6 +38,12 @@ export function orbitPointToChartRow(p: OrbitPoint): Record<string, number> {
     accel_third_body_sun: accelSun,
     accel_third_body_moon: accelMoon,
     accel_perturbation_total: accelDrag + accelSrp + accelSun + accelMoon,
+    // A torque column a run does not carry stays `NaN` rather than 0: the
+    // charts draw a gap where there is no value, where a zero would read as a
+    // measured torque of nothing.
+    ...Object.fromEntries(
+      TORQUE_CHART_METRICS.map((metric) => [metric, torqueComponent(p, metric) ?? Number.NaN]),
+    ),
   };
 }
 

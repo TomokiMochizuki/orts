@@ -932,6 +932,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `viewer`
 
 #### Added
+- 外乱トルクを model ごとに 1 チャートで表示し、body frame の 3 成分を重ねる。
+  外乱トルクで誤るのは向きで、magnitude では反対向きに回している場合と区別が付かない。
+  そのため norm ではなく x, y, z を別系列として描く。チャートは実行が持つ model
+  (`gravity_gradient`, `panel_srp`, `panel_drag`) ごとに現れ、複数衛星では各衛星の 3 軸に
+  その衛星名を付ける。1 機だけ見るときは legend で系列を isolate する。実行が持たない
+  model の列は 0 でなく空にし、チャートは「トルクが 0 と測れた」ではなく欠測として描く。
+  ([#471](https://github.com/sksat/orts/pull/471))
 - 新しい `./lib` エントリ (`viewer/src/lib`) による組み込み可能な viewer
   ライブラリ。同梱 SPA だけでなく任意の React + `@react-three/fiber` アプリに
   orbit viewer を組み込める。レイヤ化 API:

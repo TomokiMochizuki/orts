@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import { createOrbitSchema } from "./orbitSchema.js";
 
 describe("createOrbitSchema", () => {
   const schema = createOrbitSchema();
 
-  it("has 25 base columns (13 orbital + 5 acceleration + 7 attitude)", () => {
-    expect(schema.columns).toHaveLength(25);
+  it("has 25 base columns (13 orbital + 5 acceleration + 7 attitude) plus a torque column per model and axis", () => {
+    expect(schema.columns).toHaveLength(25 + TORQUE_CHART_METRICS.length);
     const names = schema.columns.map((c) => c.name);
     expect(names).toEqual([
       "t",
@@ -33,10 +34,20 @@ describe("createOrbitSchema", () => {
       "wx",
       "wy",
       "wz",
+      ...TORQUE_CHART_METRICS,
     ]);
   });
 
-  it("toRow returns 25 values matching column count", () => {
+  // `buildDerivedQuery` SELECTs only the derived columns, so a column with no
+  // pass-through here never reaches a chart however the inserts are written.
+  it("exposes every torque column to the query", () => {
+    const derived = schema.derived.map((d) => d.name);
+    for (const metric of TORQUE_CHART_METRICS) {
+      expect(derived, `"${metric}" is not queryable`).toContain(metric);
+    }
+  });
+
+  it("toRow returns one value per column", () => {
     const point = {
       t: 0,
       x: 6778,

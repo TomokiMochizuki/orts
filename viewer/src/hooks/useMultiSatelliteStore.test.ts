@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ACCEL_CHART_METRICS, BASE_CHART_METRICS, METRIC_NAMES } from "../chartMetrics.js";
+import { TORQUE_CHART_DEFS } from "../components/torqueCharts.js";
 import { buildMultiChartData } from "./buildMultiChartData.js";
 import { computeGlobalLatestT, computeUnifiedTMin } from "./computeGlobalLatestT.js";
 
@@ -155,6 +156,17 @@ describe("METRIC_NAMES covers all chart metrics", () => {
   it("includes all acceleration chart metrics", () => {
     for (const m of ACCEL_CHART_METRICS) {
       expect(METRIC_NAMES, `missing "${m}"`).toContain(m);
+    }
+  });
+
+  // Read off the chart defs rather than off `TORQUE_CHART_METRICS`, so a chart
+  // that names a column the store never queries is caught here and not as an
+  // empty chart in the browser.
+  it("includes every metric the torque charts plot", () => {
+    for (const def of TORQUE_CHART_DEFS) {
+      for (const series of def.series) {
+        expect(METRIC_NAMES, `missing "${series.metric}"`).toContain(series.metric);
+      }
     }
   });
 });

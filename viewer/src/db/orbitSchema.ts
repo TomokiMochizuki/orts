@@ -1,5 +1,6 @@
 import type { TableSchema } from "@sksat/uneri";
-import type { OrbitPoint } from "../orbit.js";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
+import { type OrbitPoint, torqueComponent } from "../orbit.js";
 
 const MU_EARTH = 398600.4418;
 const RADIUS_EARTH = 6378.137;
@@ -36,6 +37,7 @@ export function createOrbitSchema(
       { name: "wx", type: "DOUBLE" },
       { name: "wy", type: "DOUBLE" },
       { name: "wz", type: "DOUBLE" },
+      ...TORQUE_CHART_METRICS.map((metric) => ({ name: metric, type: "DOUBLE" as const })),
     ],
     derived: [
       // Pass-through: expose base columns for charting
@@ -101,6 +103,12 @@ export function createOrbitSchema(
       { name: "wx", sql: "wx", unit: "rad/s" },
       { name: "wy", sql: "wy", unit: "rad/s" },
       { name: "wz", sql: "wz", unit: "rad/s" },
+      // Per-model torque columns (nullable — a run carries only its own models)
+      ...TORQUE_CHART_METRICS.map((metric) => ({
+        name: metric,
+        sql: metric,
+        unit: "N\u00B7m",
+      })),
     ],
     toRow: (p: OrbitPoint) => [
       p.t,
@@ -128,6 +136,7 @@ export function createOrbitSchema(
       p.wx ?? null,
       p.wy ?? null,
       p.wz ?? null,
+      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? null),
     ],
   };
 }

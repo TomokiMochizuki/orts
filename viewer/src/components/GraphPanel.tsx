@@ -1,8 +1,9 @@
 import { type ChartDataMap, type TimeRange, TimeSeriesChart } from "@sksat/uneri";
 import { memo, useMemo, useState } from "react";
-import type { MultiChartDataMap } from "../hooks/buildMultiChartData.js";
+import type { MultiChartDataMap, MultiSeriesData } from "../hooks/buildMultiChartData.js";
 import { ACCEL_CHART_DEFS, isAccelChartActive } from "./accelCharts.js";
 import styles from "./GraphPanel.module.css";
+import { isTorqueChartActive, TORQUE_CHART_DEFS } from "./torqueCharts.js";
 
 const TIME_RANGE_OPTIONS: { label: string; value: TimeRange }[] = [
   { label: "All", value: null },
@@ -62,6 +63,59 @@ export const GraphPanel = memo(function GraphPanel({
     [visibleAccelDefs],
   );
 
+  // A torque chart appears when the run carries that model, and carries its
+  // three body-frame components as series: what a torque model gets wrong is
+  // the direction, which a magnitude cannot show.
+  const visibleTorqueDefs = useMemo(
+    () => TORQUE_CHART_DEFS.filter((def) => isTorqueChartActive(def.model, activePerturbations)),
+    [activePerturbations],
+  );
+
+  // One `MultiSeriesData` per model. In a fleet the series dimension is
+  // already the satellites, so each satellite's axes are labelled with its own
+  // name and the legend's isolation (click a series) is how one is read alone.
+  const torqueData = useMemo(() => {
+    const result: Record<string, MultiSeriesData | null> = {};
+    for (const def of visibleTorqueDefs) {
+      if (multiChartData) {
+        const perAxis = def.series.map((axis) => multiChartData[axis.metric]);
+        const t = perAxis.find((d) => d)?.t;
+        if (!t) {
+          result[def.model] = null;
+          continue;
+        }
+        const values: Float64Array[] = [];
+        const series: { label: string; color: string }[] = [];
+        perAxis.forEach((axisData, i) => {
+          if (!axisData) return;
+          axisData.values.forEach((satValues, sat) => {
+            values.push(satValues);
+            series.push({
+              label: `${axisData.series[sat]?.label ?? "sat"} ${def.series[i].label}`,
+              color: axisData.series[sat]?.color ?? def.series[i].color,
+            });
+          });
+        });
+        result[def.model] = values.length > 0 ? { t, values, series } : null;
+        continue;
+      }
+      if (!chartData) {
+        result[def.model] = null;
+        continue;
+      }
+      const values = def.series.map((axis) => chartData[axis.metric]).filter((v) => v);
+      result[def.model] =
+        values.length === def.series.length
+          ? {
+              t: chartData.t,
+              values,
+              series: def.series.map((axis) => ({ label: axis.label, color: axis.color })),
+            }
+          : null;
+    }
+    return result;
+  }, [visibleTorqueDefs, chartData, multiChartData]);
+
   // Single-series data extraction (for backward compat / single satellite)
   const singleSeriesData = useMemo(() => {
     if (!chartData) return null;
@@ -101,6 +155,15 @@ export const GraphPanel = memo(function GraphPanel({
               data={multiChartData ? null : (singleSeriesData?.[def.metric] ?? null)}
               multiData={multiChartData?.[def.metric]}
               color={def.color}
+              onZoom={onZoom}
+            />
+          ))}
+          {visibleTorqueDefs.map((def) => (
+            <TimeSeriesChart
+              key={def.model}
+              title={def.title}
+              yLabel="N\u00B7m"
+              multiData={torqueData[def.model]}
               onZoom={onZoom}
             />
           ))}

@@ -273,3 +273,86 @@ describe("dispatchServerMessage", () => {
     expect(onError).toHaveBeenCalledWith(expect.stringContaining("kerbin"));
   });
 });
+
+describe("torques on a state message", () => {
+  const noop = () => {};
+  const baseCallbacks = { onState: noop, onInfo: noop, onHistory: noop } as const;
+  const baseState = {
+    type: "state" as const,
+    entity_path: "sat-a",
+    t: 10,
+    position: [6778, 0, 0] as [number, number, number],
+    velocity: [0, 7.669, 0] as [number, number, number],
+    semi_major_axis: 6778,
+    eccentricity: 0,
+    inclination: 0.9,
+    raan: 0,
+    argument_of_periapsis: 0,
+    true_anomaly: 0,
+    altitude: 399.863,
+    specific_energy: -29.4,
+    angular_momentum: 51988.882,
+    velocity_mag: 7.669,
+  };
+
+  function stateFrom(torques: { model: string; torque_body_nm: [number, number, number] }[]) {
+    const onState = vi.fn();
+    dispatchServerMessage({ ...baseState, torques } as ServerMessage, {
+      ...baseCallbacks,
+      onState,
+    });
+    return onState.mock.calls[0][0];
+  }
+
+  it("flattens a model's three components into its own columns", () => {
+    const point = stateFrom([
+      { model: "gravity_gradient", torque_body_nm: [1e-5, -2e-5, 3e-5] },
+      { model: "panel_srp", torque_body_nm: [4e-7, 5e-7, 6e-7] },
+    ]);
+
+    expect(point.torque_gravity_gradient_x).toBe(1e-5);
+    expect(point.torque_gravity_gradient_y).toBe(-2e-5);
+    expect(point.torque_gravity_gradient_z).toBe(3e-5);
+    expect(point.torque_panel_srp_x).toBe(4e-7);
+  });
+
+  // A model the run does not carry must not read as a measured zero: the
+  // charts draw a gap for `undefined` and a point at zero for 0.
+  it("leaves a model the run does not carry undefined", () => {
+    const point = stateFrom([{ model: "gravity_gradient", torque_body_nm: [1e-5, 0, 0] }]);
+
+    expect(point.torque_panel_srp_x).toBeUndefined();
+    expect(point.torque_panel_drag_z).toBeUndefined();
+  });
+
+  it("keeps a measured zero distinct from an absent model", () => {
+    const point = stateFrom([{ model: "panel_drag", torque_body_nm: [0, 0, 0] }]);
+
+    expect(point.torque_panel_drag_x).toBe(0);
+    expect(point.torque_gravity_gradient_x).toBeUndefined();
+  });
+
+  // `Model::name` is not unique on the Rust side, so the wire can repeat one.
+  it("resolves a repeated model name to its first entry", () => {
+    const point = stateFrom([
+      { model: "panel_srp", torque_body_nm: [1, 2, 3] },
+      { model: "panel_srp", torque_body_nm: [9, 9, 9] },
+    ]);
+
+    expect(point.torque_panel_srp_x).toBe(1);
+  });
+
+  it("passes over a model no chart names", () => {
+    const point = stateFrom([{ model: "some_future_model", torque_body_nm: [1, 2, 3] }]);
+
+    expect(Object.keys(point).filter((k) => k.startsWith("torque_"))).toEqual([]);
+  });
+
+  it("carries no torque columns when the server sends none", () => {
+    const onState = vi.fn();
+    dispatchServerMessage(baseState as ServerMessage, { ...baseCallbacks, onState });
+    const point = onState.mock.calls[0][0];
+
+    expect(Object.keys(point).filter((k) => k.startsWith("torque_"))).toEqual([]);
+  });
+});

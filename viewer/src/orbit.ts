@@ -41,6 +41,22 @@ export interface OrbitPoint {
   accel_srp?: number;
   accel_third_body_sun?: number;
   accel_third_body_moon?: number;
+  /** Per-model body torque [N·m], by model and axis.
+   *
+   * One field per known environmental model rather than a map, because the
+   * chart metrics, the DuckDB columns and the chart definitions all name their
+   * metrics statically. A model the viewer does not know about still reaches
+   * the wire; it just has no chart yet.
+   */
+  torque_gravity_gradient_x?: number;
+  torque_gravity_gradient_y?: number;
+  torque_gravity_gradient_z?: number;
+  torque_panel_srp_x?: number;
+  torque_panel_srp_y?: number;
+  torque_panel_srp_z?: number;
+  torque_panel_drag_x?: number;
+  torque_panel_drag_y?: number;
+  torque_panel_drag_z?: number;
   /** Body-to-inertial quaternion components (Hamilton scalar-first: w,x,y,z). */
   qw?: number;
   qx?: number;
@@ -50,6 +66,17 @@ export interface OrbitPoint {
   wx?: number;
   wy?: number;
   wz?: number;
+}
+
+/** One `torque_<model>_<axis>` component, read by column name.
+ *
+ * The chart layer addresses these by name — DuckDB columns and chart rows are
+ * both keyed by the column name — so reading one back needs an index.
+ * `OrbitPoint` cannot declare a numeric index signature because `entityPath`
+ * is a string, which is what this cast stands in for.
+ */
+export function torqueComponent(p: OrbitPoint, metric: string): number | undefined {
+  return (p as unknown as Record<string, number | undefined>)[metric];
 }
 
 /** Metadata parsed from CSV comment headers. */
