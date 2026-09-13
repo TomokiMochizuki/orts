@@ -117,8 +117,8 @@ pub enum WsMessage {
         accelerations: HashMap<String, f64>,
         /// Per-model body torque [N·m], one entry per model.
         ///
-        /// Every model appears, a model that only produces an acceleration
-        /// included: its entry is a measured zero. A list rather than a map,
+        /// Every model appears, including one that only produces an
+        /// acceleration: its entry is a measured zero. A list rather than a map,
         /// because `Model::name` is not unique. Omitted from the wire when the
         /// satellite has no models at all.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

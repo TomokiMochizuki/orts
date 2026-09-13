@@ -14,9 +14,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 - `SpacecraftDynamics::load_breakdown` を追加。加速度の magnitude と body torque を、
   全モデル 1 回の評価から返す。`ExternalLoads` が両方を持っているので、両方を欲しい
   呼び出し側 (1 サンプルを報告する telemetry) が全モデルを 2 回評価する理由はない。
-  パネル 22 枚の機体では 1 回 50 µs の影の幾何を二重に払っていた。
-  `acceleration_breakdown` はこれで書き直した。`torque_breakdown` は `model_breakdown`
-  直のままにする。トルクだけを問う呼び出し側に重力場の評価は要らない。
+  パネル 22 枚の機体では 1 回 50 µs の影の幾何を二重に払っていた。片方だけを返す
+  accessor は従来どおりで、それぞれ `model_breakdown` から自分の分だけを作る。
+  `load_breakdown` を経由すると呼び出し側が捨てる半分を確保することになり、トルクだけを
+  問う呼び出し (`orts run` の各出力サンプル) には重力場の評価も要らない。
   ([#470](https://github.com/sksat/orts/pull/470))
 - `orts::eclipse` を追加。太陽を遮る天体を一覧で持ち、中心天体以外も遮蔽体になれるようにした。
   `OccultingBody` が天体の位置・半径・遮蔽の幾何を持ち、`default_occulters` が中心天体ごとの

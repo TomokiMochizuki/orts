@@ -18,9 +18,11 @@ section is subdivided by package.
   the body torques from one evaluation of every model. `ExternalLoads` carries
   both, so a caller that wants both — telemetry reporting one sample — had no
   reason to evaluate every model twice, which for a 22-panel spacecraft is
-  50 µs of shadow geometry each time. `acceleration_breakdown` is written in
-  terms of it; `torque_breakdown` stays on `model_breakdown` alone, since a
-  torque-only caller has no use for the gravity field.
+  50 µs of shadow geometry each time. The one-sided accessors stay as they
+  were, each projecting what its caller asked for from `model_breakdown`:
+  going through `load_breakdown` would build the half that caller discards, and
+  a torque-only call — every `orts run` output sample — has no use for the
+  gravity field either.
   ([#470](https://github.com/sksat/orts/pull/470))
 - `orts::eclipse` holds the bodies that can block the Sun, so more than the
   central one can: `OccultingBody` carries a body's position, radius and shadow
