@@ -13,7 +13,7 @@ import type {
   MultiChartDataWorkerClient,
 } from "@sksat/uneri/multiWorkerClient";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { METRIC_NAMES } from "../chartMetrics.js";
+import { METRIC_NAMES, TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import { createOrbitSchema } from "../db/orbitSchema.js";
 import { duckdbBundles } from "../duckdbBundles.js";
 import type { OrbitPoint } from "../orbit.js";
@@ -52,6 +52,19 @@ export interface SimulationDataResult {
   /** Expose the latestRequestedRangeRef for WS staleness check */
   latestRequestedRangeRef: React.RefObject<{ tMin: number; tMax: number } | null>;
 }
+
+/** The chart columns served from DuckDB, in the order `chartArrays` holds them. */
+const DUCKDB_CHART_COLUMNS = [
+  "altitude",
+  "energy",
+  "angular_momentum",
+  "velocity",
+  "a",
+  "e",
+  "inc_deg",
+  "raan_deg",
+  ...TORQUE_CHART_METRICS,
+];
 
 export function useSimulationData(options: UseSimulationDataOptions): SimulationDataResult {
   const {
@@ -317,22 +330,22 @@ export function useSimulationData(options: UseSimulationDataOptions): Simulation
     return chartBuffer.toChartData();
   }, [isLive, isMultiSatellite, effectiveChartVersion, timeRange, chartBuffer]);
 
-  // DuckDB chart data: used for replay, zoom outside ChartBuffer, and non-live scrubbing
+  // DuckDB chart data: used for replay, zoom outside ChartBuffer, and non-live scrubbing.
+  // `chartArrays` and `duckdbChartData` are a positional pair, so both read the
+  // same column list. A column the query did not return is left out of both.
+  // TODO: the acceleration columns are still absent here, so those charts have
+  //   no data outside the live path either — a gap that predates the torques.
+  const duckdbColumns = useMemo(
+    () =>
+      singleChartData ? DUCKDB_CHART_COLUMNS.filter((name) => singleChartData[name] != null) : [],
+    [singleChartData],
+  );
+
   const chartArrays = useMemo(() => {
     if (isMultiSatellite || !singleChartData) return null;
-    return [
-      singleChartData.t,
-      singleChartData.altitude,
-      singleChartData.energy,
-      singleChartData.angular_momentum,
-      singleChartData.velocity,
-      singleChartData.a,
-      singleChartData.e,
-      singleChartData.inc_deg,
-      singleChartData.raan_deg,
-    ];
+    return [singleChartData.t, ...duckdbColumns.map((name) => singleChartData[name])];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMultiSatellite, singleChartData, isLive]);
+  }, [isMultiSatellite, singleChartData, duckdbColumns, isLive]);
 
   const visibleArrays = useMemo(
     () => sliceArrays(chartArrays, chartCurrentTime, timeRange),
@@ -341,18 +354,13 @@ export function useSimulationData(options: UseSimulationDataOptions): Simulation
 
   const duckdbChartData = useMemo((): ChartDataMap | null => {
     if (!visibleArrays) return null;
-    return {
-      t: visibleArrays[0],
-      altitude: visibleArrays[1],
-      energy: visibleArrays[2],
-      angular_momentum: visibleArrays[3],
-      velocity: visibleArrays[4],
-      a: visibleArrays[5],
-      e: visibleArrays[6],
-      inc_deg: visibleArrays[7],
-      raan_deg: visibleArrays[8],
-    };
-  }, [visibleArrays]);
+    const data: ChartDataMap = { t: visibleArrays[0] };
+    duckdbColumns.forEach((name, i) => {
+      const values = visibleArrays[i + 1];
+      if (values) data[name] = values;
+    });
+    return data;
+  }, [visibleArrays, duckdbColumns]);
 
   // Zoom reset: clear when returning to live or when time range changes
   const prevIsLiveRef = useRef(isLive);

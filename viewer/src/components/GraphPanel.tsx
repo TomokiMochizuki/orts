@@ -162,7 +162,7 @@ export const GraphPanel = memo(function GraphPanel({
             <TimeSeriesChart
               key={def.model}
               title={def.title}
-              yLabel="N\u00B7m"
+              yLabel={def.yLabel}
               multiData={torqueData[def.model]}
               onZoom={onZoom}
             />

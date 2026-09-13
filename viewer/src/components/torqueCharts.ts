@@ -24,6 +24,8 @@ export interface TorqueChartDef {
   /** `Model::name`, as the wire reports it. */
   model: string;
   title: string;
+  /** Y-axis unit label. */
+  yLabel: string;
   /** The three axes, in plotting order. */
   series: TorqueSeries[];
 }
@@ -38,6 +40,7 @@ export const TORQUE_CHART_DEFS: TorqueChartDef[] = [
 ].map(({ model, title }) => ({
   model,
   title,
+  yLabel: "N\u00B7m",
   series: TORQUE_AXES.map((axis, i) => ({
     metric: `torque_${model}_${axis}`,
     label: axis,
