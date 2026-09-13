@@ -12,7 +12,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 
 #### Added
 - `SpacecraftDynamics::load_breakdown` を追加。加速度の magnitude と body torque を、
-  全モデル 1 回の評価から返す。`ExternalLoads` が両方を持っているので、両方を欲しい
+  全モデル 1 回の評価から `LoadBreakdown` (`orts::spacecraft` から re-export) で返す。`ExternalLoads` が両方を持っているので、両方を欲しい
   呼び出し側 (1 サンプルを報告する telemetry) が全モデルを 2 回評価する理由はない。
   パネル 22 枚の機体では 1 回 50 µs の影の幾何を二重に払っていた。片方だけを返す
   accessor は従来どおりで、それぞれ `model_breakdown` から自分の分だけを作る。

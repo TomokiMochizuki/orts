@@ -15,7 +15,8 @@ section is subdivided by package.
 
 #### Added
 - `SpacecraftDynamics::load_breakdown` answers the acceleration magnitudes and
-  the body torques from one evaluation of every model. `ExternalLoads` carries
+  the body torques from one evaluation of every model, as a `LoadBreakdown`
+  re-exported from `orts::spacecraft`. `ExternalLoads` carries
   both, so a caller that wants both — telemetry reporting one sample — had no
   reason to evaluate every model twice, which for a 22-panel spacecraft is
   50 µs of shadow geometry each time. The one-sided accessors stay as they

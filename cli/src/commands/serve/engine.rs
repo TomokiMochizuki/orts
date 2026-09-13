@@ -1515,6 +1515,17 @@ orbit = { type = "circular", altitude = 50 }
                 .iter()
                 .any(|m| m.contains("satellite_added"))
         );
+
+        // That first state carries the same acceleration breakdown every later
+        // sample does. It is built outside `snapshot`, so it is the sample that
+        // would go out empty.
+        let first: serde_json::Value =
+            serde_json::from_str(&added.broadcasts[0]).expect("the first broadcast is JSON");
+        assert_eq!(first["type"], "state");
+        assert!(
+            first["accelerations"]["gravity"].is_number(),
+            "the add-time state should report its accelerations: {first}"
+        );
     }
 
     /// A satellite added at runtime re-anchors on its own orbit.
@@ -1988,7 +1999,9 @@ cp_offset = [0.0, 0.0, 1.5]
         };
         let state = dynamics.initial_augmented_state(plant);
         let sat = ControlledSatellite::for_test(dynamics, state, Box::new(Idle), body);
-        let loads = spacecraft_loads(&sat.dynamics, 0.0, &sat.state.plant);
+        // Through `SimGroup::Controlled`'s own snapshot arm, which is the one
+        // that used to report an empty pair for every controlled satellite.
+        let loads = SimGroup::Controlled(vec![sat]).snapshot(0, 0.0).loads;
 
         assert!(
             loads.accelerations.contains_key("gravity"),
