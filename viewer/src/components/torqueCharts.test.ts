@@ -110,23 +110,25 @@ describe("buildTorqueChartData", () => {
   });
 
   describe("in a fleet", () => {
-    function multi(axes: Record<string, { t: Float64Array; sats: string[] }>) {
+    function multi(axes: Record<string, { t: Float64Array; sats: string[]; color?: string }>) {
       const map: Record<string, ReturnType<typeof series> | null> = {};
-      for (const [metric, { t: axisT, sats }] of Object.entries(axes)) {
-        map[metric] = series(axisT, sats);
+      for (const [metric, { t: axisT, sats, color }] of Object.entries(axes)) {
+        map[metric] = series(axisT, sats, color);
       }
       return map;
     }
 
-    function series(axisT: Float64Array, sats: string[]) {
+    function series(axisT: Float64Array, sats: string[], color = "#ffffff") {
       return {
         t: axisT,
         values: sats.map((_, i) => new Float64Array(axisT.length).fill(i + 1)),
-        series: sats.map((label) => ({ label, color: "#fff" })),
+        series: sats.map((label) => ({ label, color })),
       };
     }
 
-    it("labels every satellite's axes with its own name", () => {
+    // One satellite's three components belong together: reading them every
+    // third entry down the legend is what the axis-major order forced.
+    it("groups a satellite's axes together, labelled with its name", () => {
       const data = buildTorqueChartData(
         def,
         null,
@@ -139,12 +141,38 @@ describe("buildTorqueChartData", () => {
 
       expect(data?.series.map((s) => s.label)).toEqual([
         "sat-a x",
-        "sat-b x",
         "sat-a y",
-        "sat-b y",
         "sat-a z",
+        "sat-b x",
+        "sat-b y",
         "sat-b z",
       ]);
+    });
+
+    // The hue is the satellite's, so the axes are told apart by lightness —
+    // the difference that survives every kind of colour vision. Three lines in
+    // one satellite's single colour would be indistinguishable.
+    it("separates a satellite's axes by lightness within its own colour", () => {
+      const data = buildTorqueChartData(
+        def,
+        null,
+        multi({
+          [xMetric]: { t, sats: ["sat-a"], color: "#00ff88" },
+          [yMetric]: { t, sats: ["sat-a"], color: "#00ff88" },
+          [zMetric]: { t, sats: ["sat-a"], color: "#00ff88" },
+        }),
+      );
+
+      const colors = data?.series.map((s) => s.color) ?? [];
+      expect(new Set(colors).size).toBe(3);
+      const luminance = colors.map((c) => {
+        const hex = c.replace("#", "");
+        const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      });
+      // x is the satellite's own colour, y lighter, z darker.
+      expect(luminance[1]).toBeGreaterThan(luminance[0]);
+      expect(luminance[2]).toBeLessThan(luminance[0]);
     });
 
     // Equal sample counts do not make the times equal, and the type carries

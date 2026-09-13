@@ -71,6 +71,26 @@ export function isTorqueChartActive(
   return activePerturbations.includes(model);
 }
 
+/** How much each axis is moved off the satellite's own colour, in order.
+ *
+ * Positive mixes toward white, negative toward black. A fleet chart carries
+ * one hue per satellite, so the axes have to be told apart within that hue,
+ * and lightness is the difference that survives every kind of colour vision.
+ * The labels name the axis as well — the colour is not the only carrier.
+ */
+const AXIS_LIGHTNESS_STEPS = [0, 0.45, -0.4];
+
+/** Mix a `#rrggbb` colour toward white (positive) or black (negative). */
+function shade(color: string, amount: number): string {
+  const hex = color.replace("#", "");
+  if (hex.length !== 6) return color;
+  const channels = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  if (channels.some((c) => Number.isNaN(c))) return color;
+  const target = amount >= 0 ? 255 : 0;
+  const mixed = channels.map((c) => Math.round(c + (target - c) * Math.abs(amount)));
+  return `#${mixed.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** Whether two aligned axes carry the same times. */
 function sameTimes(a: Float64Array, b: Float64Array): boolean {
   if (a === b) return true;
@@ -98,21 +118,32 @@ export function buildTorqueChartData(
     const t = perAxis.find((d) => d)?.t;
     if (!t) return null;
 
+    // One chart, one time axis: an axis aligned on different times would be
+    // drawn against these ones. Equal sample counts do not make the times
+    // equal, so the values are compared.
+    const axes = perAxis.map((axisData) =>
+      axisData && sameTimes(axisData.t, t) ? axisData : null,
+    );
+
     const values: Float64Array[] = [];
     const series: { label: string; color: string }[] = [];
-    perAxis.forEach((axisData, i) => {
-      // One chart, one time axis: an axis aligned on different times would be
-      // drawn against these ones. Equal sample counts do not make the times
-      // equal, so the values are compared.
-      if (!axisData || !sameTimes(axisData.t, t)) return;
-      axisData.values.forEach((satValues, sat) => {
+    // Satellite first, then its three axes, so one satellite's components are
+    // read together rather than every third entry down the legend.
+    const satelliteCount = Math.max(0, ...axes.map((a) => a?.values.length ?? 0));
+    for (let sat = 0; sat < satelliteCount; sat++) {
+      axes.forEach((axisData, i) => {
+        const satValues = axisData?.values[sat];
+        if (!axisData || !satValues) return;
         values.push(satValues);
         series.push({
           label: `${axisData.series[sat]?.label ?? "sat"} ${def.series[i].label}`,
-          color: axisData.series[sat]?.color ?? def.series[i].color,
+          color: shade(
+            axisData.series[sat]?.color ?? def.series[i].color,
+            AXIS_LIGHTNESS_STEPS[i] ?? 0,
+          ),
         });
       });
-    });
+    }
     return values.length > 0 ? { t, values, series } : null;
   }
 
