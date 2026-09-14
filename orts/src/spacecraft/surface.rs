@@ -1233,9 +1233,11 @@ mod tests {
         );
         let a = loads.acceleration_inertial.into_inner();
         let tau = loads.torque_body.into_inner();
-        // Relative, with no absolute floor: `|a|` is ~1.3e-9 here, so a
-        // `max(1.0)` floor made the bound 1e-12 absolute — 790 times the value
-        // — and the assert passed for any acceleration at all, zero included.
+        // Relative, with no absolute floor. `|a|` is ~1.3e-9 here, so a
+        // `max(1.0)` floor turned the intended 1e-12 relative bound into 1e-12
+        // absolute, which is 7.9e-4 of the value — eight orders looser than
+        // asked. The ERA-rate change moves `a` by 9.7e-18, so the old bound
+        // left a factor of 1e5 of slack and the snapshot went on passing.
         assert!(
             (a - expected_a).magnitude() <= 1e-12 * expected_a.magnitude(),
             "SimpleEci panel drag acceleration changed: {a:?}"

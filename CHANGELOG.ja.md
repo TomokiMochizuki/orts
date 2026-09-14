@@ -169,9 +169,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   読む箇所は無い。GCRF 側の generator が持っていた同じ定数(どこからも使われていなかった)も
   併せて落とした。([#480](https://github.com/sksat/orts/pull/480))
 - パネル drag の加速度 snapshot 2 件が相対許容で比較するようになった。従来は
-  `1e-12 * expected.magnitude().max(1.0)` で、加速度が約 1e-9 なので floor により許容が
-  絶対値 1e-12 — 値自体の 790 倍 — になり、加速度がゼロでも assert が通っていた。隣にある
-  トルクの assert は同じ理由で floor を避けていた。([#480](https://github.com/sksat/orts/pull/480))
+  `1e-12 * expected.magnitude().max(1.0)` で、加速度が約 1e-9 なので floor により、意図した
+  相対 1e-12 が絶対値 1e-12 — 値の 7.9e-4、8 桁緩い — になっていた。ERA rate による加速度の
+  変化 9.7e-18 に対して 1e5 倍の余裕があり、snapshot は通り続けていた。隣にあるトルクの
+  assert は同じ理由で floor を避けていた。([#480](https://github.com/sksat/orts/pull/480))
 - 積分 step より短い燃焼も伝播に入るようになった。`IndependentGroup` と `CoupledGroup` は
   現在時刻から目標時刻まで積分器を 1 回走らせていたので、隣り合う評価点の最大間隔より狭い
   `BurnWindow` が評価点の間に落ちていた。RK4 で `dt = 1` のとき `[0.1, 0.2)` は推進剤

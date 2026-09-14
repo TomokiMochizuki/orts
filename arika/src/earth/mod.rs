@@ -96,6 +96,41 @@ mod tests {
         assert!(R > 0.0);
     }
 
+    /// `OMEGA` is a published figure, and no implementation code reads it any
+    /// more — the transforms and the drag models take [`ERA_RATE`]. Nothing
+    /// else in the suite would notice it drifting, so it is pinned here.
+    #[test]
+    fn omega_is_the_wgs84_defining_value() {
+        // NGA WGS-84: 7292115 × 10⁻¹¹ rad/s, the same figure IERS Conventions
+        // 2010 Table 1.2 lists as the GRS80 nominal mean angular velocity.
+        assert_eq!(OMEGA, 7_292_115e-11);
+    }
+
+    /// `ERA_RATE` is the derivative of the ERA expression, so it is pinned to
+    /// that expression's own coefficient rather than to a rounded figure.
+    #[test]
+    fn era_rate_is_the_era_coefficient_per_second() {
+        let expected = core::f64::consts::TAU * 1.002_737_811_911_354_6 / 86_400.0;
+        assert_eq!(ERA_RATE, expected);
+    }
+
+    /// The two are close enough that swapping them passes most numerical
+    /// checks, which is how the mix-up survived: measured, they agree to 7.7
+    /// significant digits and differ by 1.47e-12 rad/s, 2.01e-8 relative.
+    #[test]
+    fn the_two_rates_agree_to_seven_digits() {
+        let gap = (ERA_RATE - OMEGA).abs();
+        assert!(
+            (1.46e-12..1.48e-12).contains(&gap),
+            "expected a ~1.47e-12 rad/s gap, got {gap:e}"
+        );
+        let relative = gap / OMEGA;
+        assert!(
+            (2.0e-8..2.1e-8).contains(&relative),
+            "expected a ~2.01e-8 relative gap, got {relative:e}"
+        );
+    }
+
     #[test]
     fn surface_gravity_approximate() {
         // g ≈ μ/R² ≈ 9.798e-3 km/s² ≈ 9.798 m/s²

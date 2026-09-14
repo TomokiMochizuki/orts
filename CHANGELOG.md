@@ -212,10 +212,11 @@ section is subdivided by package.
   the same constant, which nothing used at all, goes with it. ([#480](https://github.com/sksat/orts/pull/480))
 - The two panel-drag acceleration snapshots compare against a relative
   tolerance. They read `1e-12 * expected.magnitude().max(1.0)`, and the
-  accelerations are ~1e-9, so the floor made the bound 1e-12 absolute — 790
-  times the value — and the assertion held for any acceleration at all, zero
-  included. The torque assertion beside them already avoided a floor for this
-  reason. ([#480](https://github.com/sksat/orts/pull/480))
+  accelerations are ~1e-9, so the floor turned the intended 1e-12 relative
+  bound into 1e-12 absolute — 7.9e-4 of the value, eight orders looser than
+  asked. That left a factor of 1e5 of slack against the 9.7e-18 the ERA rate
+  moves the acceleration by, so the snapshots went on passing. The torque
+  assertion beside them already avoided a floor for this reason. ([#480](https://github.com/sksat/orts/pull/480))
 - A scheduled burn is flown even when it is shorter than an integration step.
   `IndependentGroup` and `CoupledGroup` ran the integrator from the current time
   straight to the target, so a `BurnWindow` narrower than the largest gap

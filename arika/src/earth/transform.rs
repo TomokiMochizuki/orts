@@ -553,7 +553,7 @@ mod tests {
             (ft.angular_velocity_in_from().inner() - expected).norm() < 1e-18,
             "Gcrs spin angular velocity should be ERA_RATE·CIP"
         );
-        // |ω| ≈ OMEGA (pole is a unit vector).
+        // |ω| ≈ ERA_RATE (pole is a unit vector).
         assert!(
             (ft.angular_velocity_in_from().inner().norm() - crate::earth::ERA_RATE).abs() < 1e-16
         );
