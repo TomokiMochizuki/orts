@@ -43,13 +43,20 @@ runs:
         esac
         tarball="wild-linker-${WILD_VERSION}-${triple}.tar.gz"
         url="https://github.com/davidlattimore/wild/releases/download/${WILD_VERSION}/${tarball}"
-        # Retries: the release download answered 504 for several minutes on
-        # 2026-09-14, and every Linux job needs this one request — .cargo/config
-        # names wild as the linker for the gnu triples — so a single upstream
-        # hiccup failed ten runs at once. curl's own retry covers the transient
-        # statuses (408, 429, 5xx) and `--retry-all-errors` adds the connection
-        # ones; the checksum below is what decides whether the bytes are right.
-        curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+        # Retries: the release download answered 504 from the runners for
+        # minutes on 2026-09-14, and every Linux job needs this one request —
+        # .cargo/config names wild as the linker for the gnu triples — so one
+        # upstream window failed ten runs at once. Measured while it lasted: six
+        # attempts over ten seconds all got 504 from a runner, while the same
+        # URL answered 200 from outside, so the retry has to span minutes rather
+        # than seconds.
+        #
+        # No --retry-delay, so curl backs off exponentially (1, 2, 4, … s), and
+        # --retry-max-time bounds the whole thing. --retry covers the transient
+        # statuses (408, 429, 5xx), --retry-all-errors adds the connection ones,
+        # and a 404 still fails on the first try. The checksum below is what
+        # decides whether the bytes are right.
+        curl -fsSL --retry 8 --retry-max-time 300 --retry-all-errors \
           --connect-timeout 15 -o "/tmp/${tarball}" "$url"
         echo "${sha}  /tmp/${tarball}" | sha256sum -c -
         mkdir -p /tmp/wild-extract
