@@ -622,8 +622,8 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
-- `orts replay` sent different messages on each start, for the same RRD, because
-  it grouped the loaded states in a `HashMap` keyed by entity path. What followed that
+- Running `orts replay` twice on the same RRD sent different messages, because it
+  grouped the loaded states in a `HashMap` keyed by entity path. What followed that
   iteration order: the satellite list in the `Info` message, the entity whose
   median sample interval became `dt`, and the order of samples that share a
   timestamp — the overview, `all_states` and a `query_range` reply all merge
