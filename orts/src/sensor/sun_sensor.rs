@@ -163,9 +163,13 @@ impl SunSensor {
     /// Measure the sun direction in the body frame (fine sun sensor).
     ///
     /// Returns `SunSensorOutput::Fine` with:
-    /// - `direction: Some(...)` when the sun is visible (illumination > 0)
-    /// - `direction: None` when in total eclipse (illumination = 0)
-    /// - `illumination` in \[0, 1\]: actual eclipse-aware illumination fraction
+    /// - `direction: Some(...)`, a unit vector, when the sun is visible
+    ///   (illumination > 0) and the noisy vector still has a direction
+    /// - `direction: None` when in total eclipse (illumination = 0), when the
+    ///   spacecraft is at the Sun's centre, or when noise left a zero or
+    ///   non-finite vector
+    /// - `illumination` in \[0, 1\]: actual eclipse-aware illumination fraction,
+    ///   reported whether or not a direction came out
     pub fn measure(&mut self, state: &SpacecraftState, epoch: &Epoch) -> SunSensorOutput {
         self.measure_in_frame::<frame::SimpleEci>(state, epoch)
     }
@@ -189,12 +193,12 @@ impl SunSensor {
         let sun_eci = *F::ephemeris_rotation(epoch).transform(&sun_gcrs).inner();
         let sc_pos = *state.orbit.position_vec().inner();
         let sat_to_sun = sun_eci - sc_pos;
-        let norm = sat_to_sun.magnitude();
-        let dir_eci = if norm > 1e-15 {
-            sat_to_sun / norm
-        } else {
-            sat_to_sun
-        };
+        // At the Sun's centre there is no direction to measure. Passing the
+        // difference through unnormalized used to hand a non-unit vector (and,
+        // with noise, a plausible-looking random one) to the guest. The same
+        // normalization as the output's, so a position whose components' squares
+        // overflow is not mistaken for a degenerate one.
+        let dir_eci = crate::plugin::tick_input::normalize_finite(sat_to_sun);
 
         // What every body in the way leaves of the Sun.
         let illumination = crate::eclipse::illumination::<F>(
@@ -212,6 +216,15 @@ impl SunSensor {
             };
         }
 
+        // Sunlit, but with no direction to report: keep the illumination that
+        // was measured, so a guest can tell this from an eclipse.
+        let Some(dir_eci) = dir_eci else {
+            return SunSensorOutput::Fine {
+                direction: None,
+                illumination,
+            };
+        };
+
         // Rotate to body frame
         let dir_eci_typed = Vec3::<F>::from_raw(dir_eci);
         let dir_body = state.attitude_from_inertial().transform(&dir_eci_typed);
@@ -221,8 +234,11 @@ impl SunSensor {
             d = n.apply(d);
         }
 
+        // `new` normalizes, and answers `None` when the noise left a vector with
+        // no direction. `illumination` stays as measured: it is the geometric
+        // fraction of the Sun in view, not a flag for whether the read succeeded.
         SunSensorOutput::Fine {
-            direction: Some(SunDirectionBody::new(Vec3::<frame::Body>::from_raw(d))),
+            direction: SunDirectionBody::new(Vec3::<frame::Body>::from_raw(d)),
             illumination,
         }
     }
@@ -272,6 +288,206 @@ mod tests {
                 assert!((illumination - 1.0).abs() < 1e-15);
             }
             _ => panic!("expected Fine output"),
+        }
+    }
+
+    /// Scales its input by a fixed factor, so the output norm is known exactly.
+    struct ScaleNoise(f64);
+
+    impl NoiseModel for ScaleNoise {
+        fn apply(&mut self, true_value: Vector3<f64>) -> Vector3<f64> {
+            true_value * self.0
+        }
+    }
+
+    /// Replaces its input, for the degenerate cases a random model reaches only
+    /// with vanishing probability.
+    struct ReplaceNoise(Vector3<f64>);
+
+    impl NoiseModel for ReplaceNoise {
+        fn apply(&mut self, _true_value: Vector3<f64>) -> Vector3<f64> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn noise_does_not_change_the_length_of_the_measured_direction() {
+        let mut sensor = SunSensor::new().with_noise(ScaleNoise(1.1));
+        let output = sensor.measure(&leo_state(), &Epoch::j2000());
+        match output {
+            SunSensorOutput::Fine { direction, .. } => {
+                let mag = direction
+                    .expect("sunlit, so a direction is measured")
+                    .into_inner()
+                    .magnitude();
+                assert!(
+                    (mag - 1.0).abs() < 1e-12,
+                    "SunDirectionBody is documented as a unit vector, got {mag}"
+                );
+            }
+            _ => panic!("expected Fine output"),
+        }
+    }
+
+    #[test]
+    fn noise_moves_the_direction_it_reports() {
+        let clean = match SunSensor::new().measure(&leo_state(), &Epoch::j2000()) {
+            SunSensorOutput::Fine { direction, .. } => {
+                direction.expect("sunlit").into_inner().into_inner()
+            }
+            _ => panic!("expected Fine output"),
+        };
+        // Only the part of an offset perpendicular to the direction turns into
+        // an angle, so offset perpendicular: the expected angle is then atan(0.02).
+        let perp = clean.cross(&Vector3::new(0.0, 0.0, 1.0)).normalize() * 0.02;
+        let mut sensor = SunSensor::new().with_noise(ReplaceNoise(clean + perp));
+        let noisy = match sensor.measure(&leo_state(), &Epoch::j2000()) {
+            SunSensorOutput::Fine { direction, .. } => {
+                direction.expect("sunlit").into_inner().into_inner()
+            }
+            _ => panic!("expected Fine output"),
+        };
+        let angle = (noisy.dot(&clean).clamp(-1.0, 1.0)).acos();
+        let expected = 0.02_f64.atan();
+        assert!(
+            (angle - expected).abs() < 1e-9,
+            "normalizing must keep the angular error {expected} rad, got {angle}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_measurement_reports_no_direction_and_keeps_illumination() {
+        let mut sensor = SunSensor::new().with_noise(ReplaceNoise(Vector3::zeros()));
+        match sensor.measure(&leo_state(), &Epoch::j2000()) {
+            SunSensorOutput::Fine {
+                direction,
+                illumination,
+            } => {
+                assert!(
+                    direction.is_none(),
+                    "a zero vector carries no direction, so none should be reported"
+                );
+                assert!(
+                    (illumination - 1.0).abs() < 1e-15,
+                    "the spacecraft is still in full sun: {illumination}"
+                );
+            }
+            _ => panic!("expected Fine output"),
+        }
+    }
+
+    #[test]
+    fn non_finite_noise_reports_no_direction() {
+        for bad in [
+            Vector3::new(f64::NAN, 0.0, 0.0),
+            Vector3::new(f64::INFINITY, 0.0, 0.0),
+            Vector3::new(0.0, f64::NEG_INFINITY, 0.0),
+        ] {
+            let mut sensor = SunSensor::new().with_noise(ReplaceNoise(bad));
+            match sensor.measure(&leo_state(), &Epoch::j2000()) {
+                SunSensorOutput::Fine { direction, .. } => assert!(
+                    direction.is_none(),
+                    "{bad:?} cannot be normalized, so none should be reported"
+                ),
+                _ => panic!("expected Fine output"),
+            }
+        }
+    }
+
+    #[test]
+    fn huge_but_finite_noise_still_reports_a_unit_vector() {
+        // The squares of these components overflow to inf, so normalizing by
+        // `magnitude()` alone would return NaN.
+        let mut sensor =
+            SunSensor::new().with_noise(ReplaceNoise(Vector3::new(1e200, -2e200, 3e200)));
+        match sensor.measure(&leo_state(), &Epoch::j2000()) {
+            SunSensorOutput::Fine { direction, .. } => {
+                let v = direction
+                    .expect("a finite non-zero vector has a direction")
+                    .into_inner()
+                    .into_inner();
+                assert!(v.iter().all(|c| c.is_finite()), "got {v:?}");
+                let mag = v.magnitude();
+                assert!((mag - 1.0).abs() < 1e-12, "expected unit vector, got {mag}");
+            }
+            _ => panic!("expected Fine output"),
+        }
+    }
+
+    #[test]
+    fn subnormal_and_mixed_magnitude_noise_still_report_a_unit_vector() {
+        // Scaling by the largest component before normalizing is what keeps
+        // these exact: subnormal components would underflow to zero when
+        // squared, and a vector mixing 1e-320 with 1e200 would overflow.
+        for v in [
+            Vector3::new(1e-320, -2e-320, 3e-320),
+            Vector3::new(f64::MIN_POSITIVE, 0.0, 0.0),
+            Vector3::new(1e-320, 1e200, 0.0),
+        ] {
+            let mut sensor = SunSensor::new().with_noise(ReplaceNoise(v));
+            match sensor.measure(&leo_state(), &Epoch::j2000()) {
+                SunSensorOutput::Fine { direction, .. } => {
+                    let mag = direction
+                        .unwrap_or_else(|| panic!("{v:?} has a direction"))
+                        .into_inner()
+                        .magnitude();
+                    assert!((mag - 1.0).abs() < 1e-12, "{v:?} gave magnitude {mag}");
+                }
+                _ => panic!("expected Fine output"),
+            }
+        }
+    }
+
+    #[test]
+    fn at_the_suns_centre_there_is_no_direction_but_the_sunlight_is_reported() {
+        use arika::sun::sun_position_eci;
+        let epoch = Epoch::j2000();
+        let sun = sun_position_eci(&epoch.to_tdb()).into_inner();
+        let mut state = leo_state();
+        state.orbit = OrbitalState::new(sun, Vector3::new(0.0, 0.0, 0.0));
+
+        let mut sensor = SunSensor::new().without_shadow();
+        match sensor.measure(&state, &epoch) {
+            SunSensorOutput::Fine {
+                direction,
+                illumination,
+            } => {
+                assert!(
+                    direction.is_none(),
+                    "no direction exists at the Sun's centre"
+                );
+                assert!(
+                    illumination > 0.0,
+                    "this is not an eclipse, so illumination must stay positive: {illumination}"
+                );
+            }
+            _ => panic!("expected Fine output"),
+        }
+    }
+
+    #[test]
+    fn sun_direction_body_rejects_what_has_no_direction() {
+        use crate::plugin::SunDirectionBody;
+
+        let unit = |x, y, z| {
+            SunDirectionBody::new(Vec3::<frame::Body>::from_raw(Vector3::new(x, y, z)))
+                .map(|d| d.into_inner().into_inner().magnitude())
+        };
+        assert_eq!(unit(0.0, 0.0, 0.0), None, "a zero vector has no direction");
+        assert_eq!(unit(f64::NAN, 1.0, 0.0), None);
+        assert_eq!(unit(f64::INFINITY, 0.0, 0.0), None);
+        assert_eq!(unit(0.0, f64::NEG_INFINITY, 1.0), None);
+        for (x, y, z) in [
+            (3.0, 4.0, 0.0),
+            (f64::MAX, f64::MAX, f64::MAX),
+            (1e-320, -1e-320, 0.0),
+            (f64::MIN_POSITIVE, 0.0, 0.0),
+        ] {
+            let mag = unit(x, y, z).unwrap_or_else(|| panic!("{x},{y},{z} has a direction"));
+            assert!(
+                (mag - 1.0).abs() < 1e-12,
+                "{x},{y},{z} gave magnitude {mag}"
+            );
         }
     }
 

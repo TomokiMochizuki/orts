@@ -134,7 +134,7 @@ interface types {
         w: f64, x: f64, y: f64, z: f64,
     }
 
-    /// ������座標系での太陽方向（単位ベクトル、satellite→Sun）。
+    /// 機体座標系での太陽方向（単位ベクトル、satellite→Sun）。
     record sun-direction-body {
         x: f64, y: f64, z: f64,
     }
@@ -142,7 +142,11 @@ interface types {
     /// Fine sun sensor 出力: 方向 + 照度。
     record sun-fine-output {
         /// 太陽方向 body frame (unit vector, satellite→Sun)。
-        /// 本影 (total eclipse, illumination = 0) 中は none。
+        /// none になるのは 2 通りで、illumination で区別できる:
+        /// - illumination = 0: 本影 (total eclipse)
+        /// - illumination > 0: 方向が測れない。宇宙機が太陽中心にある、または
+        ///   noise が方向を失わせた (ノルム 0、非有限)
+        /// illumination はどちらの場合も測定値のまま。方向が出たかどうかは表さない。
         /// 半影 (penumbra) 中は太陽中心方向を返す (方向バイアス未モデル化)。
         direction: option<sun-direction-body>,
         /// 照度 \[0, 1\]。1 = full sun, 0 = full eclipse。
@@ -153,7 +157,7 @@ interface types {
     variant sun-sensor-output {
         /// Fine sun sensor: 太陽方向 + 照度。
         fine(sun-fine-output),
-        /// Coarse sun sensor (CSS): cos(入射角) × 照度 ��スカラー。
+        /// Coarse sun sensor (CSS): cos(入射角) × 照度 のスカラー。
         /// TODO: coarse 実装は将来追加予定。
         coarse(f64),
     }
@@ -168,7 +172,7 @@ interface types {
         /// ジャイロスコープ。
         gyroscopes: list<angular-velocity-body>,
 
-        /// スタ��トラッカ。
+        /// スタートラッカ。
         star-trackers: list<attitude-body-to-inertial>,
 
         /// 太陽センサ。

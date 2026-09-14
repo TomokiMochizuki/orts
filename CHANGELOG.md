@@ -195,6 +195,30 @@ section is subdivided by package.
   ([#469](https://github.com/sksat/orts/pull/469))
 
 #### Fixed
+- **Breaking**: `SunSensor` reported a direction that was not a unit vector
+  once noise was enabled, and `SunDirectionBody::new` now returns
+  `Option<SunDirectionBody>` rather than `SunDirectionBody`. A caller that built
+  one itself takes the `None` arm for a vector with no direction, or
+  `.expect(...)` where the input is known to be a direction. The sensor normalized the satellite→Sun direction, rotated it into
+  the body frame, added the noise, and wrapped the result without normalizing
+  again, while the type and the WIT both document a unit vector: with a noise
+  model that scales its input by 1.1 the reported vector had length 1.1, and
+  with the built-in Gaussian noise at σ = 0.01 each sample was off by about 1%.
+  A guest reading the dot product as a cosine, or recovering an angle from the
+  components, got a wrong value. `SunDirectionBody::new` now normalizes and is
+  the place the invariant is enforced, so no producer has to remember to; it
+  answers `None` for a vector with no direction — any non-finite component, or a
+  length of zero, which additive noise can produce by cancellation — and the
+  normalization scales by the largest component first, so components whose
+  squares overflow still yield a unit vector. `SunSensor::measure` also stops
+  passing on the satellite-at-Sun-centre case, which used to hand out the raw
+  (unnormalized, then noise-scaled) difference. `illumination` is unchanged in
+  every case: it is the geometric fraction of the Sun in view, not a flag for
+  whether the read succeeded, so the two reasons for `direction: None` are told
+  apart by it — 0 is an eclipse, positive is a direction that could not be
+  measured. The WIT records that taxonomy.
+  ([#447](https://github.com/sksat/orts/issues/447))
+
 - The default `omega_body` of `AtmosphericDrag` and `PanelDrag`, and the
   `perturbations::OMEGA_EARTH` re-export, are `arika::earth::ERA_RATE`. The
   co-rotating atmosphere turns with the frame's `R` step, so its angular
