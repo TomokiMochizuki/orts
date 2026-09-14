@@ -1,5 +1,6 @@
 import type { TableSchema } from "@sksat/uneri";
-import type { OrbitPoint } from "../orbit.js";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
+import { type OrbitPoint, torqueComponent } from "../orbit.js";
 
 const MU_EARTH = 398600.4418;
 const RADIUS_EARTH = 6378.137;
@@ -36,6 +37,7 @@ export function createOrbitSchema(
       { name: "wx", type: "DOUBLE" },
       { name: "wy", type: "DOUBLE" },
       { name: "wz", type: "DOUBLE" },
+      ...TORQUE_CHART_METRICS.map((metric) => ({ name: metric, type: "DOUBLE" as const })),
     ],
     derived: [
       // Pass-through: expose base columns for charting
@@ -101,6 +103,15 @@ export function createOrbitSchema(
       { name: "wx", sql: "wx", unit: "rad/s" },
       { name: "wy", sql: "wy", unit: "rad/s" },
       { name: "wz", sql: "wz", unit: "rad/s" },
+      // Per-model torque columns. A run carries only its own models, and a
+      // model it does not carry has to read as a gap rather than as a torque
+      // measured to be zero, so the query asks for NaN explicitly: what a
+      // NULL double becomes in a `Float64Array` is a detail of Arrow's export.
+      ...TORQUE_CHART_METRICS.map((metric) => ({
+        name: metric,
+        sql: `COALESCE(${metric}, 'NaN'::DOUBLE)`,
+        unit: "N\u00B7m",
+      })),
     ],
     toRow: (p: OrbitPoint) => [
       p.t,
@@ -128,6 +139,11 @@ export function createOrbitSchema(
       p.wx ?? null,
       p.wy ?? null,
       p.wz ?? null,
+      // `null` for a model this run does not carry, as the attitude columns
+      // do. `buildInsertSQLFromRows` writes any non-finite value as SQL NULL
+      // anyway, so NaN here would reach the table as the same thing; the
+      // derived query is where the gap is made explicit.
+      ...TORQUE_CHART_METRICS.map((metric) => torqueComponent(p, metric) ?? null),
     ],
   };
 }

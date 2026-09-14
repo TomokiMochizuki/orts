@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TORQUE_AXES, TORQUE_CHART_MODELS } from "../chartMetrics.js";
 import type { OrbitPoint } from "../orbit.js";
 import type { AttitudePayload } from "../protocol/generated/AttitudePayload.js";
 import type { ClientMessage } from "../protocol/generated/ClientMessage.js";
 import type { HistoryState } from "../protocol/generated/HistoryState.js";
+import type { ModelTorque } from "../protocol/generated/ModelTorque.js";
 import type { SatelliteInfo as WireSatelliteInfo } from "../protocol/generated/SatelliteInfo.js";
 import type { WsMessage } from "../protocol/generated/WsMessage.js";
 import type { MarkerShape } from "../satelliteShapes.js";
@@ -114,6 +116,27 @@ function parseAccelerations(accels?: Record<string, number>) {
   };
 }
 
+/** Flatten the per-model torque list into the columns the charts name.
+ *
+ * The wire carries a list because `Model::name` is not unique on the Rust
+ * side. The viewer charts the models it knows, so a repeated name resolves to
+ * the first entry and a model with no chart is passed over. A model that is
+ * absent stays `undefined` rather than becoming 0, which is what tells "this
+ * run has no such model" from "its torque is zero right now".
+ */
+function parseTorques(torques?: ModelTorque[]) {
+  if (!torques || torques.length === 0) return {};
+  const flat: Record<string, number> = {};
+  for (const model of TORQUE_CHART_MODELS) {
+    const entry = torques.find((t) => t.model === model);
+    if (!entry) continue;
+    TORQUE_AXES.forEach((axis, i) => {
+      flat[`torque_${model}_${axis}`] = entry.torque_body_nm[i];
+    });
+  }
+  return flat;
+}
+
 function parseAttitude(attitude?: AttitudePayload) {
   if (!attitude) return {};
   const [qw, qx, qy, qz] = attitude.quaternion_wxyz;
@@ -142,6 +165,7 @@ function parseHistoryPoints(states: HistoryState[]): OrbitPoint[] {
     angular_momentum: s.angular_momentum,
     velocity_mag: s.velocity_mag,
     ...parseAccelerations(s.accelerations),
+    ...parseTorques(s.torques),
     ...parseAttitude(s.attitude),
   }));
 }
@@ -183,6 +207,7 @@ export function dispatchServerMessage(
       angular_momentum: msg.angular_momentum,
       velocity_mag: msg.velocity_mag,
       ...parseAccelerations(msg.accelerations),
+      ...parseTorques(msg.torques),
       ...parseAttitude(msg.attitude),
     });
   } else if (msg.type === "info") {

@@ -8,6 +8,7 @@
 
 import { ChartBuffer, IngestBuffer } from "@sksat/uneri";
 import { useCallback, useRef, useState } from "react";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import type { OrbitPoint } from "../orbit.js";
 import { TrailBuffer } from "../utils/TrailBuffer.js";
 import {
@@ -40,6 +41,7 @@ const CHART_COLUMNS = [
   "accel_third_body_sun",
   "accel_third_body_moon",
   "accel_perturbation_total",
+  ...TORQUE_CHART_METRICS,
 ];
 
 // Initialize factories for eventDispatcher

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import { orbitPointToChartRow } from "./eventDispatcher.js";
 import { ORBIT_DERIVED_STRIDE, packStates, toOrbitPoints } from "./rrdOrbitDerived.js";
 import type { RrdPointOut } from "./rrdParseLogic.js";
@@ -104,5 +105,55 @@ describe("toOrbitPoints", () => {
     expect(row.a).toBe(6778.137);
     // Angles reach the chart in degrees.
     expect(row.inc_deg).toBeCloseTo((0.9 * 180) / Math.PI, 9);
+  });
+});
+
+/** The live single-satellite path: `ChartBuffer.push` reads these columns.
+ *
+ * A chart whose every value is `NaN` still renders its title and legend, so
+ * the browser test cannot tell a dropped value from a plotted one. These can.
+ */
+describe("orbitPointToChartRow torque columns", () => {
+  const base = {
+    t: 10,
+    x: 6778,
+    y: 0,
+    z: 0,
+    vx: 0,
+    vy: 7.669,
+    vz: 0,
+    a: 6778,
+    e: 0.001,
+    inc: 0.9,
+    raan: 0,
+    omega: 0,
+    nu: 0,
+  };
+
+  it("carries each component of a model the run has", () => {
+    const row = orbitPointToChartRow({
+      ...base,
+      torque_panel_srp_x: 4e-7,
+      torque_panel_srp_y: -5e-7,
+      torque_panel_srp_z: 6e-7,
+    });
+
+    expect(row.torque_panel_srp_x).toBe(4e-7);
+    expect(row.torque_panel_srp_y).toBe(-5e-7);
+    expect(row.torque_panel_srp_z).toBe(6e-7);
+  });
+
+  it("keeps a measured zero as zero", () => {
+    const row = orbitPointToChartRow({ ...base, torque_panel_drag_x: 0 });
+
+    expect(row.torque_panel_drag_x).toBe(0);
+  });
+
+  it("leaves a model the run does not have as a gap", () => {
+    const row = orbitPointToChartRow(base);
+
+    for (const metric of TORQUE_CHART_METRICS) {
+      expect(row[metric], `"${metric}" should be a gap`).toBeNaN();
+    }
   });
 });

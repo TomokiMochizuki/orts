@@ -1102,6 +1102,17 @@ section is subdivided by package.
 ### `viewer`
 
 #### Added
+- A torque chart per disturbance model, with the three body-frame components
+  overlaid. What a disturbance torque gets wrong is its direction — a spacecraft
+  turned the wrong way reads the same as one turned the right way in a
+  magnitude — so the chart plots x, y and z as separate series rather than a
+  norm. One chart appears per model the run carries (`gravity_gradient`,
+  `panel_srp`, `panel_drag`), and in a fleet each satellite's three axes are
+  labelled with its name, so a single satellite is read by isolating its series
+  in the legend. A model the run does not carry leaves its columns empty rather
+  than zero, which the chart draws as a gap instead of a measured torque of
+  nothing.
+  ([#471](https://github.com/sksat/orts/pull/471))
 - Embeddable viewer library at a new `./lib` entry (`viewer/src/lib`), so the
   orbit viewer can be dropped into any React + `@react-three/fiber` app, not only
   the bundled SPA. Layered API:
@@ -1217,6 +1228,13 @@ section is subdivided by package.
 ### `uneri` (npm: `@sksat/uneri`)
 
 #### Added
+- `TimeSeriesChart` takes `spanGaps` (default `true`, the behaviour it had).
+  Multi-series data carries a gap wherever one series has no sample at an
+  instant another one does, and a line drawn across that gap is right. A
+  caller whose gaps mean no value exists there — a column for a model the run
+  does not carry — passes `false`, and the line breaks instead of stating a
+  value that was never computed.
+  ([#471](https://github.com/sksat/orts/pull/471))
 - `update-schema` / `multi-update-schema` Worker messages and
   `ChartDataWorkerClient.updateSchema()` / `MultiChartDataWorkerClient.updateSchema()`,
   so a schema change reaches the Worker after it was initialized. ([#341](https://github.com/sksat/orts/pull/341))

@@ -100,18 +100,23 @@ export function computeLegendIsolation(clickedIndex: number, currentShow: boolea
 /**
  * Build uPlot series config array from SeriesConfig[].
  *
- * spanGaps is enabled because aligned multi-series data contains null gaps
- * (from float64NanToNull) at time points where a series has no value.
- * Each series should render as a continuous line across those gaps.
+ * spanGaps is enabled by default because aligned multi-series data contains
+ * null gaps (from float64NanToNull) at time points where a series has no
+ * value, and each satellite's line should stay continuous across the instants
+ * where another one happened to be sampled.
+ *
+ * A caller whose gaps mean "no value exists here" rather than "no sample
+ * lands here" passes `spanGaps: false`, so the line breaks instead of
+ * stating a value that was never computed.
  */
-export function buildMultiSeriesConfig(configs: SeriesConfig[]): uPlot.Series[] {
+export function buildMultiSeriesConfig(configs: SeriesConfig[], spanGaps = true): uPlot.Series[] {
   const result: uPlot.Series[] = [{}]; // x-axis placeholder
   for (const cfg of configs) {
     result.push({
       label: cfg.label,
       stroke: cfg.color,
       width: 1.5,
-      spanGaps: true,
+      spanGaps,
     });
   }
   return result;
@@ -165,6 +170,13 @@ interface TimeSeriesChartProps {
   color?: string;
   /** Called when the user zooms into a time range via drag. */
   onZoom?: (tMin: number, tMax: number) => void;
+  /**
+   * Whether to draw across gaps in multi-series data (default `true`).
+   *
+   * Pass `false` where a gap means no value exists at that time, rather than
+   * no sample landing there: the line then breaks at the gap.
+   */
+  spanGaps?: boolean;
 }
 
 export function TimeSeriesChart({
@@ -175,6 +187,7 @@ export function TimeSeriesChart({
   height = 200,
   color = "#0f0",
   onZoom,
+  spanGaps = true,
 }: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -197,7 +210,7 @@ export function TimeSeriesChart({
     if (multiData && multiData.series.length > 0 && multiData.t.length >= 2) {
       return {
         plotData: [multiData.t, ...multiData.values.map(float64NanToNull)] as uPlot.AlignedData,
-        seriesConfig: buildMultiSeriesConfig(multiData.series),
+        seriesConfig: buildMultiSeriesConfig(multiData.series, spanGaps),
       };
     }
     if (data && data[0].length >= 2) {

@@ -73,6 +73,14 @@ describe("buildMultiSeriesConfig", () => {
     });
   });
 
+  // A gap means "no sample landed here" for aligned satellites, and the line
+  // stays continuous across it. A caller whose gaps mean "no value exists
+  // here" asks for the line to break instead.
+  it("breaks the line at gaps when the caller asks", () => {
+    const result = buildMultiSeriesConfig([{ label: "x", color: "#f00" }], false);
+    expect(result[1].spanGaps).toBe(false);
+  });
+
   it("returns correct config for three series", () => {
     const result = buildMultiSeriesConfig([
       { label: "A", color: "#f00" },

@@ -1,8 +1,9 @@
 import { type ChartDataMap, type TimeRange, TimeSeriesChart } from "@sksat/uneri";
 import { memo, useMemo, useState } from "react";
-import type { MultiChartDataMap } from "../hooks/buildMultiChartData.js";
+import type { MultiChartDataMap, MultiSeriesData } from "../hooks/buildMultiChartData.js";
 import { ACCEL_CHART_DEFS, isAccelChartActive } from "./accelCharts.js";
 import styles from "./GraphPanel.module.css";
+import { buildTorqueChartData, isTorqueChartActive, TORQUE_CHART_DEFS } from "./torqueCharts.js";
 
 const TIME_RANGE_OPTIONS: { label: string; value: TimeRange }[] = [
   { label: "All", value: null },
@@ -62,6 +63,25 @@ export const GraphPanel = memo(function GraphPanel({
     [visibleAccelDefs],
   );
 
+  // A torque chart appears when the run carries that model, and carries its
+  // three body-frame components as series: what a torque model gets wrong is
+  // the direction, which a magnitude cannot show.
+  const visibleTorqueDefs = useMemo(
+    () => TORQUE_CHART_DEFS.filter((def) => isTorqueChartActive(def.model, activePerturbations)),
+    [activePerturbations],
+  );
+
+  // One `MultiSeriesData` per model. In a fleet the series dimension is
+  // already the satellites, so each satellite's axes are labelled with its own
+  // name and the legend's isolation (click a series) is how one is read alone.
+  const torqueData = useMemo(() => {
+    const result: Record<string, MultiSeriesData | null> = {};
+    for (const def of visibleTorqueDefs) {
+      result[def.model] = buildTorqueChartData(def, chartData, multiChartData);
+    }
+    return result;
+  }, [visibleTorqueDefs, chartData, multiChartData]);
+
   // Single-series data extraction (for backward compat / single satellite)
   const singleSeriesData = useMemo(() => {
     if (!chartData) return null;
@@ -102,6 +122,19 @@ export const GraphPanel = memo(function GraphPanel({
               multiData={multiChartData?.[def.metric]}
               color={def.color}
               onZoom={onZoom}
+            />
+          ))}
+          {visibleTorqueDefs.map((def) => (
+            <TimeSeriesChart
+              key={def.model}
+              title={def.title}
+              yLabel={def.yLabel}
+              multiData={torqueData[def.model]}
+              onZoom={onZoom}
+              // A gap here is a sample with no such model, not a sample that
+              // landed between another satellite's: drawing across it would
+              // state a torque that was never computed.
+              spanGaps={false}
             />
           ))}
         </div>

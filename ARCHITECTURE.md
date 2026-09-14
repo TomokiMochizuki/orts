@@ -185,6 +185,15 @@ sequenceDiagram
 - **History path (cold):** `IngestBuffer` → DuckDB is the cache used for
   zoom, downsampling, and post-hoc queries. Eventually consistent with
   the ring buffer.
+- **A chart column is declared per path:** the live ring buffer copies only
+  its registered columns, and the DuckDB path needs the column, a `derived`
+  pass-through for the query to select, and a value per insert. A column
+  missing from any of these yields an empty chart rather than an error, so a
+  new chart metric is added to every one of them at once. A column that can be
+  absent asks the query for NaN (`COALESCE(col, 'NaN'::DOUBLE)`) so the chart
+  draws a gap: what a NULL double becomes in the `Float64Array` the store
+  hands over is a detail of Arrow's export, and a 0 there reads as a measured
+  value.
 - **Source abstraction:** every input normalizes into the same
   `SourceEvent` stream, so live and replay go through one pipeline.
   The live WebSocket path bridges through the `useWebSocket` hook
