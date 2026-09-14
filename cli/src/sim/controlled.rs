@@ -1049,6 +1049,45 @@ mod tests {
     }
 
     #[test]
+    fn an_event_in_a_middle_segment_leaves_the_later_ones_unrun() {
+        use orts::spacecraft::{BurnWindow, ScheduledBurn, Thruster};
+
+        // A burn window at [1, 3) cuts the span into [0,1), [1,3), [3,30].
+        let (mut sat, _) = falling_satellite(100.0);
+        sat.state.plant.orbit = orts::orbital::OrbitalState::new(
+            Vector3::new(KnownBody::Earth.properties().radius + 110.0, 0.0, 0.0),
+            Vector3::new(-6.0, 0.0, 0.0),
+        );
+        sat.dynamics = std::mem::replace(
+            &mut sat.dynamics,
+            orts::spacecraft::SpacecraftDynamics::new(
+                arika::earth::MU,
+                Box::new(orts::orbital::gravity::PointMass),
+                nalgebra::Matrix3::identity(),
+            ),
+        )
+        .with_model(
+            Thruster::new(10.0, 300.0, Vector3::x()).with_profile(Box::new(ScheduledBurn {
+                windows: vec![BurnWindow::full(1.0, 3.0)],
+            })),
+        );
+
+        let params = params_with(crate::cli::IntegratorChoice::Rk4, 1.0, 1e-9);
+        let term = advance_controlled(&mut sat, 0.0, 30.0, &params)
+            .expect("the burn and the fall are finite")
+            .expect("6 km/s down from 110 km crosses the line inside [1, 3)");
+
+        assert!(term.t > 1.0 && term.t < 3.0, "stopped at {} s", term.t);
+        assert_eq!(sat.state_t, term.t, "the committed time is the crossing's");
+        let alt =
+            sat.state.plant.orbit.position().magnitude() - KnownBody::Earth.properties().radius;
+        assert!(
+            (0.0..100.0).contains(&alt),
+            "the state came from {alt} km, so a later segment ran"
+        );
+    }
+
+    #[test]
     fn a_satellite_below_the_surface_stops_before_integrating() {
         let params = params_with(crate::cli::IntegratorChoice::Rk4, 1.0, 1e-9);
         let (mut sat, ticks) = falling_satellite(4.0);

@@ -1304,14 +1304,21 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         // A satellite that stopped is recorded at the time it stopped, which is
         // inside this step rather than at its end, and is left out of every
         // sample after that.
+        //
+        // The comparison with `last_output_t` is strict: a satellite that was
+        // already below the surface terminates at t=0, where the initial
+        // sample sits, and recording it again would put two rows on one entity
+        // at one sim time.
         for (i, term) in &stopped {
             println!(
                 "Simulation terminated at t={:.2}s for {}: {}",
                 term.t, params.satellites[*i].id, term.reason
             );
-            let sat = &satellites[*i];
-            let tp = TimePoint::new().with_sim_time(term.t).with_step(step);
-            log_controlled_state(&mut rec, &sat_paths[*i], &tp, term.t, sat);
+            if term.t > last_output_t {
+                let sat = &satellites[*i];
+                let tp = TimePoint::new().with_sim_time(term.t).with_step(step);
+                log_controlled_state(&mut rec, &sat_paths[*i], &tp, term.t, sat);
+            }
         }
 
         // The event time itself, not `t + dt`. The subtraction that made `dt`
@@ -1321,11 +1328,10 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         // rather than by an argument about rounding.
         t = next_t;
 
-        if satellites.iter().all(|sat| sat.terminated.is_some()) {
-            break;
-        }
-
         // 可視性は出力間引きと独立に、制御 tick ごとにサンプリングする。
+        // 全機終了の判定より前に置く: そうしないと、最後の衛星が終了した区間
+        // では終了状態が monitor に渡らず、同じ衛星の contact window の終端が
+        // 「ほかに生存機がいるか」で変わってしまう。
         if let Some(monitors) = visibility.as_mut() {
             feed_visibility(
                 monitors,
@@ -1351,6 +1357,10 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             step += 1;
             last_output_t = t;
             next_output_t += params.output_interval;
+        }
+
+        if satellites.iter().all(|sat| sat.terminated.is_some()) {
+            break;
         }
     }
 

@@ -511,6 +511,18 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `dt` と同じなら、モデル評価の作業が 4 分の 1 ほど増える。([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `mode = "controlled"` が、地表に衝突した衛星や大気圏に入った衛星を止めていなかった。
+  orbit-only と spacecraft は `body_event_checker` を `IndependentGroup` に渡すが、controlled の
+  ループは述語なしで積分していた(adaptive 側は `Continue` 固定の closure、`Rk4` は hook のない
+  `try_integrate`)。地表以下の衛星が伝播され続け、`serve` の終了判定も構造上 `false` を返していた。
+  3 つの integrator をすべて `stepper().advance_to(..., event_check)` に通した。目標時刻に達したら
+  その時刻を、event なら stepper が止まった状態と時刻を commit し、積分エラーでは従来どおり
+  衛星を元の位置に残す。検査は controller より先に行うので、衛星が止まった時刻に予定されていた
+  tick は走らず、地表下で投入された衛星は一度も積分されない。1 機の終了で fleet の run は
+  終わらない。`run` はその衛星を自身の終了時刻で 1 度記録し、orbit-only と同じ形で報告して、
+  以降のサンプルと可視性の評価から外す。`serve` は既存の broadcast と再接続用リングに流れる経路で
+  `simulation_terminated` を送る。
+  ([#442](https://github.com/sksat/orts/issues/442))
 - 同じ RRD に対して `orts replay` を 2 回実行すると、viewer に送るメッセージの中身が違っていた。
   読み込んだ状態を entity path ごとに `HashMap` でまとめていたためで、その反復順に従っていたのは次の 3 つ。`Info` メッセージの衛星の
   並び、median のサンプル間隔を `dt` として採る entity、そして同じ時刻を持つサンプル同士の順序 —
