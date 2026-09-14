@@ -51,19 +51,21 @@ pub struct ControlledBuildContext<'a> {
     pub plugin_backend: ResolvedPluginBackend,
 }
 
-/// 制御付き衛星の状態。
 /// Why a satellite stopped being propagated, and the time of the state it
 /// stopped at.
 ///
-/// `t` is where the integrator detected the condition, which is the first step
-/// end past the surface rather than the crossing itself — the same meaning the
-/// event checker has in [`orts::group::IndependentGroup`].
+/// `t` is where the condition was detected, which is one of two places: the
+/// start of the span, when the state handed to [`advance_controlled`] already
+/// satisfies it, or the end of the step that first landed past the surface.
+/// Neither is the crossing itself — the same meaning the event checker has in
+/// [`orts::group::IndependentGroup`].
 #[derive(Debug, Clone)]
 pub struct Termination {
     pub t: f64,
     pub reason: String,
 }
 
+/// 制御付き衛星の状態。
 pub struct ControlledSatellite {
     pub dynamics: SpacecraftDynamics<Box<dyn GravityField>>,
     pub state: AugmentedState<SpacecraftState>,
@@ -571,6 +573,13 @@ where
                 // is what a segment ending at a switch of the right-hand side
                 // needs.
                 let mut stepper = Rk4.stepper(bound, state.clone(), t, *dt);
+                // As in the adaptive arms: a later segment starts from a state
+                // the check has already accepted, and `FixedStepper` documents
+                // that asking again about the same `(t, state)` can change what
+                // a stateful predicate answers.
+                if segment.is_continuation() {
+                    stepper = stepper.from_checked_state();
+                }
                 let outcome = stepper
                     .advance_to(segment_end, |_, _| {}, event_check)
                     .map_err(span)?;

@@ -104,21 +104,23 @@ impl SimGroup {
     /// controller output cannot be trusted (bad command, guest trap, stream-io
     /// overrun fault, ...), so the error is propagated and the caller halts
     /// the simulation instead of integrating bad state forward.
-    /// Step the controlled satellites, and answer the ones that stopped in
-    /// this span as `(index, termination)`.
-    ///
     /// The index is into this group; the caller turns it into the satellite's
     /// id from `metas`, which is where the real ids live.
+    ///
+    /// `stopped` is an argument rather than a return value so a later
+    /// satellite's error does not discard what was already collected: those
+    /// satellites are marked terminated and answer `None` from then on, so a
+    /// dropped entry is a termination that is never reported.
     fn step_controlled_to(
         &mut self,
         current_t: f64,
         target_t: f64,
         params: &SimParams,
-    ) -> Result<Vec<(usize, crate::sim::controlled::Termination)>, String> {
+        stopped: &mut Vec<(usize, crate::sim::controlled::Termination)>,
+    ) -> Result<(), String> {
         let SimGroup::Controlled(sats) = self else {
-            return Ok(Vec::new());
+            return Ok(());
         };
-        let mut stopped = Vec::new();
         for (i, sat) in sats.iter_mut().enumerate() {
             crate::config::validate_sample_period(sat.controller.sample_period())?;
             // `target_t - current_t` is the stream/output interval, which has
@@ -132,7 +134,7 @@ impl SimGroup {
                 stopped.push((i, term));
             }
         }
-        Ok(stopped)
+        Ok(())
     }
 
     /// Number of satellites.
@@ -357,6 +359,12 @@ pub(super) struct ServeEngine {
     /// late-connecting clients. Bounded by [`TERMINATED_EVENTS_CAP`] to avoid
     /// unbounded growth in long-running sims with many deorbiting satellites.
     terminated_events: VecDeque<String>,
+    /// Controlled satellites that stopped and have not been reported yet.
+    ///
+    /// A step that fails partway leaves what it collected here rather than
+    /// dropping it: those satellites are already terminated, so nothing else
+    /// would report them.
+    pending_terminations: Vec<(usize, crate::sim::controlled::Termination)>,
     current_t: f64,
     /// How many `stream_step` boundaries have been crossed. The next boundary
     /// is `(steps_done + 1) * stream_step`, not `current_t + stream_step`:
@@ -683,6 +691,7 @@ impl ServeEngine {
             history,
             info: info_msg,
             terminated_events: VecDeque::new(),
+            pending_terminations: Vec::new(),
             current_t: 0.0,
             steps_done: 0,
             has_perturbations,
@@ -843,9 +852,15 @@ impl ServeEngine {
             self.pump_streams_inbound(streams)?;
 
             // Controlled satellites: step in dt_ctrl increments up to target_t.
-            let controlled_stopped =
-                self.group
-                    .step_controlled_to(self.current_t, target_t, &self.params)?;
+            // Into the engine's own queue: an error here halts the step, and
+            // whatever stopped before it still has to reach the client, which
+            // the next step that succeeds does.
+            self.group.step_controlled_to(
+                self.current_t,
+                target_t,
+                &self.params,
+                &mut self.pending_terminations,
+            )?;
 
             self.pump_streams_outbound(streams)?;
 
@@ -893,7 +908,7 @@ impl ServeEngine {
             // their terminations are added here and travel the same path: the
             // broadcast, and the ring replayed to a client that reconnects.
             let mut outcome = outcome;
-            for (i, term) in controlled_stopped {
+            for (i, term) in std::mem::take(&mut self.pending_terminations) {
                 outcome
                     .terminations
                     .push(orts::group::prop_group::SatelliteTermination {

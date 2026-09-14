@@ -1310,7 +1310,9 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         // sample sits, and recording it again would put two rows on one entity
         // at one sim time.
         for (i, term) in &stopped {
-            println!(
+            // stderr: stdout carries the CSV stream and the `--json` summary,
+            // and the orbit-only path reports there for the same reason.
+            eprintln!(
                 "Simulation terminated at t={:.2}s for {}: {}",
                 term.t, params.satellites[*i].id, term.reason
             );
