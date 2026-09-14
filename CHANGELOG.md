@@ -201,7 +201,7 @@ section is subdivided by package.
   rather than the geodetic nominal constant. **Drag accelerations change** by
   9.46e-9 relative — measured on the snapshot states, where the tolerance is
   1e-12 relative, so the expected values were updated rather than the
-  tolerance. ([#478](https://github.com/sksat/orts/pull/478))
+  tolerance. ([#480](https://github.com/sksat/orts/pull/480))
 - A scheduled burn is flown even when it is shorter than an integration step.
   `IndependentGroup` and `CoupledGroup` ran the integrator from the current time
   straight to the target, so a `BurnWindow` narrower than the largest gap
@@ -959,11 +959,11 @@ section is subdivided by package.
   `ERA_RATE` now, since that is the derivative of the rotation it applies —
   measured, the two disagreed by `7.53e-12` rad/s, which is 0.0482 mm/s at the
   6403 km cross-axis radius of the state-transform snapshots. `OMEGA` stays as
-  the geodetic constant beside `MU` and `R`. ([#478](https://github.com/sksat/orts/pull/478))
+  the geodetic constant beside `MU` and `R`. ([#480](https://github.com/sksat/orts/pull/480))
 - The note on `era_formula` said arika's coefficient differed from the
   canonical SOFA `1.00273781191135448` by about 1 ULP and that the canonical
   value would be adopted later. Both spellings round to the same f64
-  (`0x3ff00b36cdc9f32b`), so there was nothing to adopt. ([#478](https://github.com/sksat/orts/pull/478))
+  (`0x3ff00b36cdc9f32b`), so there was nothing to adopt. ([#480](https://github.com/sksat/orts/pull/480))
 - `KeplerianElements::from_state_vector` lost the periapsis direction of an
   eccentric equatorial orbit: it zeroed both the RAAN and the argument of
   periapsis while still measuring the true anomaly from the eccentricity vector,
