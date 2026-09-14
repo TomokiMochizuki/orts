@@ -33,6 +33,11 @@
           "target": "@components/orbit-viewer/cameraProps.ts"
         },
         {
+          "path": "src/chartMetrics.ts",
+          "type": "registry:lib",
+          "target": "@components/orbit-viewer/chartMetrics.ts"
+        },
+        {
           "path": "src/components/Arrow.tsx",
           "type": "registry:component",
           "target": "@components/orbit-viewer/components/Arrow.tsx"

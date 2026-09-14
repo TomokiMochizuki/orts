@@ -1004,6 +1004,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   wire 型を置き換え、`satellite_added` variant を追加。([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- CSV を開いたとき、ファイルが持つ header に従って列を読むようにした。これでモデルごとの
+  トルクと姿勢が viewer に届く。従来は列を位置で読み `nu` で止めていて、`orts run` は
+  角速度・トルク・quaternion をその後ろに書くため、すべて落としていた。空セル（列は fleet
+  全体の和集合なので、そのモデルを持たない衛星の欄は空になる）は値を入れないままにする。
+  `Number("")` は 0 になり、「トルクが 0 と測れた」と読めてしまうため。header を持たない
+  ファイルは従来どおり位置で読む。400 km で `diag(10, 40, 45)` を傾けた CSV で実測:
+  gravity-gradient トルク 6.720e-5 N·m で、`.rrd` と live wire と同じ値。
+  ([#477](https://github.com/sksat/orts/pull/477))
 - モデルごとのトルクを持つ `.rrd` を開いたときに、そのトルクチャートが出るようにした。
   値は記録に入っている (`orts run` が書く) が decoder が落としていたため、live 実行では
   チャートが出るのに同じ実行をファイルから再生すると出なかった。モデルが「ある」と見なすのは

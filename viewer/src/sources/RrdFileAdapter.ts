@@ -6,13 +6,13 @@
  * worker messages into SourceEvents.
  */
 
-import type { OrbitPoint } from "../orbit.js";
+import { type OrbitPoint, torqueModelsOf } from "../orbit.js";
 import { initArika, orbit_derived_batch } from "../wasm/arikaInit.js";
 import type { BodyCatalog } from "./bodyCatalog.js";
 import { type CentralBody, describeCentralBodyError, resolveCentralBody } from "./centralBody.js";
 import { rrdMetadataToSimInfo } from "./normalizeMetadata.js";
 import { ORBIT_DERIVED_STRIDE, packStates, toOrbitPoints } from "./rrdOrbitDerived.js";
-import { type RrdPointOut, type RrdWorkerMessage, torqueModelsOf } from "./rrdParseLogic.js";
+import type { RrdPointOut, RrdWorkerMessage } from "./rrdParseLogic.js";
 import type { SourceAdapter, SourceEventHandler, SourceId } from "./types.js";
 
 export class RrdFileAdapter implements SourceAdapter {
