@@ -1004,6 +1004,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   wire 型を置き換え、`satellite_added` variant を追加。([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- chunk 単位のファイル読み込みが終わった直後に届いたサンプルが二重に数えられていた。
+  読み込みは各衛星の ingest buffer に trail の配列そのものを置換データとして渡すが、
+  buffer はその参照を保持し、以後の push は別に queue され、両者を連結して返す。
+  そのため間に届いた点が両方に現れていた。snapshot を渡すようにした。
+  ([#474](https://github.com/sksat/orts/pull/474))
 - 実行中に追加した衛星のチャートが出るようにした。`satellite_added` は WebSocket
   hook までは届いていたが、そこで止まっていたため、チャートの表示条件を作る Info
   snapshot に追加した衛星が入らず、その衛星の加速度もトルクもチャートが出なかった。

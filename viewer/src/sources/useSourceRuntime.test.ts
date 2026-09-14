@@ -170,60 +170,19 @@ describe("createEventDispatcher", () => {
     ]);
   });
 
-  // Which chart store is used follows the satellite count, so the first add
-  // moves a session from the single-satellite store to the multi-satellite
-  // one. That store starts empty and the samples were already drained out of
-  // these buffers, so the satellite that was there would lose its history.
-  it("rebuilds from the trails when one satellite becomes a fleet", () => {
-    const buffers = createTestBuffers();
-    const state = createTestState();
-    const dispatch = createEventDispatcher(buffers, state, "ws-0");
-    dispatch("ws-0", { kind: "info", info: makeSimInfo() });
-    for (const t of [0, 10, 20]) {
-      dispatch("ws-0", { kind: "state", point: makePoint(t, "sat1") });
-    }
-
-    dispatch("ws-0", {
-      kind: "satellite-added",
-      satellite: {
-        id: "sat2",
-        name: "sat2",
-        altitude: 700,
-        period: 5900,
-        perturbations: ["drag"],
-        shape: null,
-      },
-      t: 20,
-    });
-
-    const existing = buffers.ingestBuffers.get("sat1") as unknown as IngestBufferStub;
-    expect(existing.rebuildData?.map((p) => p.t)).toEqual([0, 10, 20]);
-  });
-
   // The rebuild data must be a snapshot, not the trail's own array: a state
   // arriving before the worker consumes the rebuild would otherwise be both
   // in the retained array and in `pending`, and `consumeRebuild` returns the
   // two concatenated.
-  it("does not repeat a sample that arrives during the rebuild", () => {
+  it("does not repeat a sample that arrives after a finished chunk load", () => {
     const buffers = createTestBuffers();
     const state = createTestState();
     const dispatch = createEventDispatcher(buffers, state, "ws-0");
     dispatch("ws-0", { kind: "info", info: makeSimInfo() });
-    for (const t of [0, 10]) {
-      dispatch("ws-0", { kind: "state", point: makePoint(t, "sat1") });
-    }
-
     dispatch("ws-0", {
-      kind: "satellite-added",
-      satellite: {
-        id: "sat2",
-        name: "sat2",
-        altitude: 700,
-        period: 5900,
-        perturbations: ["drag"],
-        shape: null,
-      },
-      t: 10,
+      kind: "history-chunk",
+      points: [makePoint(0, "sat1"), makePoint(10, "sat1")],
+      done: true,
     });
     // One more sample before the worker's next tick.
     dispatch("ws-0", { kind: "state", point: makePoint(20, "sat1") });

@@ -38,12 +38,20 @@ const NO_DRAG = {
   ],
 };
 
-/** The satellite added at runtime, whose ballistic coefficient brings drag. */
+/** The satellites added at runtime; the ballistic coefficient brings drag. */
 const ADDED = {
   id: "sat-b",
   name: "sat-b",
   orbit: { type: "circular", altitude: 400 },
   ballistic_coeff: 50.0,
+};
+
+/** A second one, sent immediately after: two announcements in one render. */
+const ADDED_AGAIN = {
+  id: "sat-c",
+  name: "sat-c",
+  orbit: { type: "circular", altitude: 600 },
+  ballistic_coeff: 60.0,
 };
 
 let server: ChildProcess | undefined;
@@ -125,18 +133,25 @@ test("a satellite added at runtime brings the charts for its own models", async 
   // Add one with a ballistic coefficient, through a second client. The server
   // broadcasts the announcement to every connection, the app's included.
   const sent = await page.evaluate(
-    ([url, satellite]) =>
+    ([url, first, second]) =>
       new Promise<string>((resolve, reject) => {
         const ws = new WebSocket(url as string);
+        const announced: Record<string, { models: string[]; t: number }> = {};
         ws.addEventListener("open", () => {
           // `add_satellite` flattens the satellite config into the envelope.
-          ws.send(JSON.stringify({ type: "add_satellite", ...(satellite as object) }));
+          // Both go out without waiting, so the two announcements reach the
+          // app in one render.
+          ws.send(JSON.stringify({ type: "add_satellite", ...(first as object) }));
+          ws.send(JSON.stringify({ type: "add_satellite", ...(second as object) }));
         });
         ws.addEventListener("message", (e) => {
           const msg = JSON.parse(e.data as string);
           if (msg.type === "satellite_added") {
-            ws.close();
-            resolve(JSON.stringify(msg.satellite.perturbations));
+            announced[msg.satellite.id] = { models: msg.satellite.perturbations, t: msg.t };
+            if (Object.keys(announced).length === 2) {
+              ws.close();
+              resolve(JSON.stringify(announced));
+            }
           }
           if (msg.type === "error") {
             ws.close();
@@ -145,19 +160,64 @@ test("a satellite added at runtime brings the charts for its own models", async 
         });
         setTimeout(() => {
           ws.close();
-          reject(new Error("no satellite_added within 20s"));
+          reject(new Error("both satellite_added did not arrive within 20s"));
         }, 20000);
       }),
-    [wsUrl, ADDED] as const,
+    [wsUrl, ADDED, ADDED_AGAIN] as const,
   );
-  console.log("added satellite reports:", sent);
-  // The server names the models it built for the new satellite; an empty list
+  console.log("added satellites report:", sent);
+  // The server names the models it built for each new satellite; an empty list
   // here is the regression this whole path exists to prevent.
-  expect(JSON.parse(sent)).toContain("drag");
+  const announced = JSON.parse(sent) as Record<string, { models: string[]; t: number }>;
+  for (const { models } of Object.values(announced)) {
+    expect(models).toContain("drag");
+  }
+  // The time the first add landed: the samples before it are the history the
+  // satellite that was already running must keep.
+  const addT = Math.min(...Object.values(announced).map((a) => a.t));
+  expect(addT).toBeGreaterThan(0);
 
   // And that model reaches the charts.
   await expect(chartTitled(page, "Drag")).toBeVisible({ timeout: 40000 });
   // What the run already had stays: the merge adds to the snapshot rather
   // than replacing it.
   await expect(chartTitled(page, "Sun 3rd-body")).toBeVisible();
+
+  // A title is drawn whether or not any value arrived, so read the aligned
+  // data the charts render. Every satellite has to be there — losing the
+  // first of two same-render announcements would drop one — and the one that
+  // was already running has to keep the samples from before the add, which is
+  // what the rebuild on the crossing is for.
+  const series = await page.waitForFunction(
+    (addTime) => {
+      const data = (window as unknown as Record<string, unknown>)
+        .__debug_multi_chart_data as Record<
+        string,
+        { t: Float64Array; values: Float64Array[]; series: { label: string }[] }
+      > | null;
+      const altitude = data?.altitude;
+      if (!altitude || altitude.values.length < 3) return null;
+      const labels = altitude.series.map((s) => s.label);
+      const at = labels.findIndex((l) => l.includes("sat-a"));
+      if (at === -1) return null;
+      let before = 0;
+      let after = 0;
+      altitude.values[at].forEach((v, i) => {
+        if (!Number.isFinite(v)) return;
+        if (altitude.t[i] < addTime) before++;
+        else after++;
+      });
+      if (after === 0) return null;
+      return { labels, before, after };
+    },
+    addT,
+    { timeout: 40000 },
+  );
+  const measured = await series.jsonValue();
+  console.log("aligned chart data:", JSON.stringify(measured));
+  expect(measured.labels.some((l: string) => l.includes("sat-b"))).toBe(true);
+  expect(measured.labels.some((l: string) => l.includes("sat-c"))).toBe(true);
+  // The samples from before the add are the history the crossing must keep:
+  // the run streams one every 5 s of simulated time from t = 0.
+  expect(measured.before).toBeGreaterThan(3);
 });

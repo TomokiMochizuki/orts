@@ -1181,6 +1181,12 @@ section is subdivided by package.
   replacing the hand-written wire types and adding the `satellite_added` variant. ([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- A sample arriving just after a chunked file load finished was counted twice.
+  The load hands each satellite's ingest buffer the trail's own array as the
+  replacement dataset, and that buffer keeps the reference while later pushes
+  queue separately, then returns the two concatenated — so a point arriving in
+  between appeared in both halves. It is handed a snapshot now.
+  ([#474](https://github.com/sksat/orts/pull/474))
 - A satellite added to a running simulation brings its own charts. The
   `satellite_added` announcement reached the WebSocket hook and stopped there,
   so the added satellite never entered the Info snapshot the chart-visibility

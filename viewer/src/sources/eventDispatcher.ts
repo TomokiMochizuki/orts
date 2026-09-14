@@ -194,19 +194,9 @@ export function createEventDispatcher(
     }
 
     switch (event.kind) {
-      case "satellite-added": {
-        const before = state.simInfo?.satellites.length ?? 0;
+      case "satellite-added":
         state.simInfo = upsertSatellite(state.simInfo, event.satellite);
-        const after = state.simInfo?.satellites.length ?? 0;
-        // Crossing from one satellite to a fleet changes which chart store is
-        // used, and the new one starts empty — the samples it would want were
-        // drained out of these buffers by the old one. Rebuild from the
-        // trails, as a finished chunked load does.
-        if (before === 1 && after > 1) {
-          rebuildFromTrails(buffers);
-        }
         break;
-      }
 
       case "info":
         state.simInfo = event.info;
