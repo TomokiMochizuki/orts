@@ -1133,10 +1133,16 @@ impl OutputSchedule {
 /// `span_end_t`.
 ///
 /// They sample on the controller's cadence, so an output boundary is not by
-/// itself an event: feeding them there would make AOS/LOS interpolation and
-/// short-pass detection depend on `output_interval`, which is a sampling
+/// itself an event: feeding them there would tie the AOS/LOS interpolation and
+/// the detection of short passes to `output_interval`, which is a sampling
 /// setting. A step that stopped a satellite is an event — the run may end right
 /// after it, and the terminal state is what closes an open contact.
+///
+/// This keeps the cadence off `output_interval`; it does not make the numbers
+/// independent of it. Ending spans at the boundaries changes the steps the
+/// integrator takes — Rk4 gets a shortened last step per span, the adaptive
+/// pair restarts — so the states themselves still differ between two output
+/// settings.
 fn monitors_want(span_end_t: f64, fleet_event_t: f64, duration: f64, stopped_any: bool) -> bool {
     span_end_t >= fleet_event_t || span_end_t >= duration || stopped_any
 }
