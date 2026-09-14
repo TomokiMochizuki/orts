@@ -158,7 +158,7 @@ function cell(cells: string[], index: number | undefined): number | undefined {
  * Parse a data line against a header, or return null if it is not a state.
  *
  * Every column the viewer reads is found by name, so a file that grows a
- * column in the middle — as the recorder's did — still parses.
+ * column in the middle — as the recorder did — still parses.
  */
 export function parseDataLineWithColumns(line: string, columns: CSVColumns): OrbitPoint | null {
   const cells = line.split(",").map((s) => s.trim());
