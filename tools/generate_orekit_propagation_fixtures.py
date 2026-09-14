@@ -42,10 +42,6 @@ J3_EARTH = -2.5356e-6
 J4_EARTH = -1.6199e-6
 MU_SUN_KM3_S2 = 132712440018.0
 MU_MOON_KM3_S2 = 4902.800066       # from ThirdBodyGravity::moon()
-# Echoed into the fixture's metadata only. Orekit's drag takes the co-rotation
-# velocity from the ITRF transform, so this never reaches the propagation and
-# does not describe what generated the reference data.
-OMEGA_EARTH = 7.2921159e-5          # rad/s
 SOLAR_RADIATION_PRESSURE = 4.5396e-6  # N/m² at 1 AU
 DEFAULT_CR = 1.5
 DEFAULT_AREA_TO_MASS = 0.02         # m²/kg
@@ -1110,7 +1106,6 @@ def main():
             "j4": J4_EARTH,
             "mu_sun_km3_s2": MU_SUN_KM3_S2,
             "mu_moon_km3_s2": MU_MOON_KM3_S2,
-            "omega_earth_rad_s": OMEGA_EARTH,
             "solar_radiation_pressure_pa": SOLAR_RADIATION_PRESSURE,
         },
         "scenarios": all_scenarios,

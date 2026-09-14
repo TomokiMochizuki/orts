@@ -241,9 +241,8 @@ pub trait EarthFixedTransform: EarthRotationPole {
     /// states), not just positions.
     ///
     /// The angular velocity is `ERA_RATE · earth_pole` — the rate the chain's
-    /// own Earth Rotation Angle advances at
-    /// ([`earth::ERA_RATE`](crate::earth::ERA_RATE)) about the spin axis from
-    /// [`EarthRotationPole`]. This models **Earth spin transport only**: it is
+    /// `R` step advances at ([`earth::ERA_RATE`](crate::earth::ERA_RATE))
+    /// about the spin axis from [`EarthRotationPole`]. This models **Earth spin transport only**: it is
     /// not the full time-derivative of the IAU 2006 W·R·Q chain (the
     /// precession/nutation/polar-motion rates Q̇/Ẇ, ~sub-µrad/s, are omitted),
     /// and it carries no LOD correction.
