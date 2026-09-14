@@ -43,7 +43,14 @@ runs:
         esac
         tarball="wild-linker-${WILD_VERSION}-${triple}.tar.gz"
         url="https://github.com/davidlattimore/wild/releases/download/${WILD_VERSION}/${tarball}"
-        curl -fsSL -o "/tmp/${tarball}" "$url"
+        # Retries: the release download answered 504 for several minutes on
+        # 2026-09-14, and every Linux job needs this one request — .cargo/config
+        # names wild as the linker for the gnu triples — so a single upstream
+        # hiccup failed ten runs at once. curl's own retry covers the transient
+        # statuses (408, 429, 5xx) and `--retry-all-errors` adds the connection
+        # ones; the checksum below is what decides whether the bytes are right.
+        curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+          --connect-timeout 15 -o "/tmp/${tarball}" "$url"
         echo "${sha}  /tmp/${tarball}" | sha256sum -c -
         mkdir -p /tmp/wild-extract
         tar -xzf "/tmp/${tarball}" -C /tmp/wild-extract
