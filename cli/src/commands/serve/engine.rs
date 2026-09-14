@@ -104,9 +104,10 @@ impl SimGroup {
     /// controller output cannot be trusted (bad command, guest trap, stream-io
     /// overrun fault, ...), so the error is propagated and the caller halts
     /// the simulation instead of integrating bad state forward.
-    /// `ids` is the caller's satellite ids in group order — `metas` is where
-    /// the real ids live, and an entry that waits must not depend on the
-    /// group's ordering staying put.
+    /// `metas` is the caller's satellite metadata in group order, which is
+    /// where the real ids live: an entry that waits must not depend on the
+    /// group's ordering staying put, so what is queued is the id. Only a
+    /// satellite that stopped costs one.
     ///
     /// `stopped` is an argument rather than a return value so a later
     /// satellite's error does not discard what was already collected: those
@@ -118,11 +119,18 @@ impl SimGroup {
         target_t: f64,
         params: &SimParams,
         stopped: &mut Vec<(SatId, crate::sim::controlled::Termination)>,
-        ids: &[SatId],
+        metas: &[SatMeta],
     ) -> Result<(), String> {
         let SimGroup::Controlled(sats) = self else {
             return Ok(());
         };
+        // The two are built together, satellite by satellite, and nothing
+        // removes or reorders either; this says so where an id is read.
+        assert_eq!(
+            metas.len(),
+            sats.len(),
+            "the satellite metadata and the controlled group have drifted apart"
+        );
         for (i, sat) in sats.iter_mut().enumerate() {
             crate::config::validate_sample_period(sat.controller.sample_period())?;
             // `target_t - current_t` is the stream/output interval, which has
@@ -135,7 +143,7 @@ impl SimGroup {
             if let Some(term) = term {
                 // The id, not the index: the entry can wait across steps, and
                 // a satellite added meanwhile pushes onto the same vector.
-                stopped.push((ids[i].clone(), term));
+                stopped.push((SatId::from(metas[i].spec.id.as_str()), term));
             }
         }
         Ok(())
@@ -866,17 +874,12 @@ impl ServeEngine {
             // Into the engine's own queue: an error here halts the step, and
             // whatever stopped before it still has to reach the client, which
             // the next step that succeeds does.
-            let ids: Vec<SatId> = self
-                .metas
-                .iter()
-                .map(|m| SatId::from(m.spec.id.as_str()))
-                .collect();
             self.group.step_controlled_to(
                 self.current_t,
                 target_t,
                 &self.params,
                 &mut self.pending_terminations,
-                &ids,
+                &self.metas,
             )?;
 
             self.pump_streams_outbound(streams)?;
