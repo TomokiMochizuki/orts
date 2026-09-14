@@ -1129,6 +1129,18 @@ impl OutputSchedule {
     }
 }
 
+/// Whether the ground-station monitors have to see the span that ended at
+/// `span_end_t`.
+///
+/// They sample on the controller's cadence, so an output boundary is not by
+/// itself an event: feeding them there would make AOS/LOS interpolation and
+/// short-pass detection depend on `output_interval`, which is a sampling
+/// setting. A step that stopped a satellite is an event — the run may end right
+/// after it, and the terminal state is what closes an open contact.
+fn monitors_want(span_end_t: f64, fleet_event_t: f64, duration: f64, stopped_any: bool) -> bool {
+    span_end_t >= fleet_event_t || span_end_t >= duration || stopped_any
+}
+
 /// 制御付きシミュレーション（プラグインコントローラ + RW + センサ）。
 fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Recording, CmdError> {
     use crate::sim::controlled::{ControlledBuildContext, build_controlled_satellite};
@@ -1401,7 +1413,7 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         // 全機終了の判定より前に置く: そうしないと、最後の衛星が終了した区間
         // では終了状態が monitor に渡らず、同じ衛星の contact window の終端が
         // 「ほかに生存機がいるか」で変わってしまう。
-        let monitor_event = next_t >= fleet_event_t || next_t >= duration || !stopped.is_empty();
+        let monitor_event = monitors_want(next_t, fleet_event_t, duration, !stopped.is_empty());
         if let Some(monitors) = visibility.as_mut().filter(|_| monitor_event) {
             feed_visibility(
                 monitors,
@@ -2106,6 +2118,29 @@ mod tests {
 
     fn sample_times(interval: f64, duration: f64, tick_period: f64) -> Vec<f64> {
         walk_schedule(interval, duration, tick_period).taken
+    }
+
+    #[test]
+    fn the_monitors_see_ticks_and_stops_but_not_output_boundaries() {
+        // period 1 s, duration 10 s: the next fleet event is at 1.0.
+        let tick = 1.0;
+        let duration = 10.0;
+        assert!(
+            !monitors_want(0.1, tick, duration, false),
+            "an output boundary would put the monitors on output_interval"
+        );
+        assert!(
+            monitors_want(tick, tick, duration, false),
+            "a controller tick is an event"
+        );
+        assert!(
+            monitors_want(duration, tick, duration, false),
+            "the run's end is an event"
+        );
+        assert!(
+            monitors_want(0.1, tick, duration, true),
+            "a satellite stopped: the terminal state has to reach the monitors"
+        );
     }
 
     #[test]
