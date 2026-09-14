@@ -70,10 +70,14 @@ pub struct Termination {
 pub struct ControlledSatellite {
     pub dynamics: SpacecraftDynamics<Box<dyn GravityField>>,
     pub state: AugmentedState<SpacecraftState>,
-    /// Sim time `state` belongs to [s]. Where the satellite entered the
-    /// simulation until something propagates it.
+    /// Sim time `state` belongs to [s].
+    ///
+    /// Starts at the time the satellite entered the simulation, and moves with
+    /// `state`: to a span's end when the span completes, or to where the
+    /// termination check stopped it. A terminated satellite keeps the time it
+    /// stopped at.
     pub state_t: f64,
-    /// Set when the event predicate broke. A terminated satellite is not
+    /// Set when the termination check broke on this satellite. It is then not
     /// propagated, ticked, or sampled again.
     pub terminated: Option<Termination>,
     pub controller: Box<dyn PluginController>,
