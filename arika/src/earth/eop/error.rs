@@ -55,7 +55,17 @@ impl fmt::Display for EopParseError {
     }
 }
 
-impl core::error::Error for EopParseError {}
+impl core::error::Error for EopParseError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            // `Table` wraps the construction error, so a reporter walking the
+            // chain reaches it rather than stopping at this variant's own
+            // message. Every other variant is the whole story.
+            Self::Table(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Error during EOP table lookup.
 ///

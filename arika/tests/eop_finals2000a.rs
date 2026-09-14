@@ -665,3 +665,28 @@ fn a_non_finite_spelling_is_refused_in_every_column() {
         }
     }
 }
+
+/// `EopParseError::Table` wraps the error `EopTable::new` returned, so a
+/// reporter walking `Error::source()` reaches it rather than stopping at this
+/// variant's own message. The other variants are the whole story and have no
+/// source.
+#[test]
+fn a_wrapped_construction_error_is_reachable_through_source() {
+    use std::error::Error;
+
+    let wrapped =
+        arika::earth::eop::EopParseError::Table(arika::earth::eop::EopLookupError::NonFiniteMjd {
+            index: 0,
+            mjd: f64::NAN,
+        });
+    let source = wrapped.source().expect("the wrapped error is the source");
+    assert!(
+        source.to_string().contains("non-finite MJD"),
+        "the source should be the lookup error, got {source}"
+    );
+
+    assert!(
+        arika::earth::eop::EopParseError::Empty.source().is_none(),
+        "a variant that wraps nothing has no source"
+    );
+}
