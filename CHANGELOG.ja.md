@@ -164,7 +164,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   型と WIT はどちらも unit vector と書いてある。入力を 1.1 倍する noise model なら長さは 1.1、
   組み込みの Gaussian noise の σ = 0.01 なら各サンプルが 1% 程度ずれる。内積を cos として読む
   guest や、成分から角度を復元する guest は誤った値を得る。`SunDirectionBody::new` が正規化を
-  行う場所になり、生産者側が正規化を覚えておく必要がなくなった。方向を持たないベクトル
+  行う場所になり、長さ 1 を守るのが `SunSensor` の手順ではなく型の側になった。方向を持たないベクトル
   (非有限な成分、長さ 0 — additive noise の打ち消しで起こりうる) には `None` を返す。正規化は
   最大成分でスケールしてから行うので、二乗が overflow する成分でも単位ベクトルになる。
   `SunSensor::measure` は宇宙機が太陽中心にある場合も渡さなくなった (従来は正規化していない
