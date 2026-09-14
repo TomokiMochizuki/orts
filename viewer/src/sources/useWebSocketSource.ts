@@ -7,7 +7,12 @@
  */
 
 import { useCallback, useRef } from "react";
-import { type QueryRangeResponse, type SimInfo, useWebSocket } from "../hooks/useWebSocket.js";
+import {
+  type QueryRangeResponse,
+  type SatelliteInfo,
+  type SimInfo,
+  useWebSocket,
+} from "../hooks/useWebSocket.js";
 import type { OrbitPoint } from "../orbit.js";
 import type { ClientMessage } from "../protocol/generated/ClientMessage.js";
 import type { SimConfig } from "../protocol/generated/SimConfig.js";
@@ -129,6 +134,11 @@ export function useWebSocketSource(options: UseWebSocketSourceOptions): WebSocke
     (body: string) => handleEvent(WS_SOURCE_ID, { kind: "textures-ready", body }),
     [handleEvent],
   );
+  const handleSatelliteAdded = useCallback(
+    (satellite: SatelliteInfo, t: number) =>
+      handleEvent(WS_SOURCE_ID, { kind: "satellite-added", satellite, t }),
+    [handleEvent],
+  );
 
   const { connect, disconnect, isConnected, send } = useWebSocket({
     url: wsUrl,
@@ -140,6 +150,7 @@ export function useWebSocketSource(options: UseWebSocketSourceOptions): WebSocke
     onStatus: handleStatus,
     onError: handleError,
     onTexturesReady: handleTexturesReady,
+    onSatelliteAdded: handleSatelliteAdded,
   });
 
   // Sim control callbacks

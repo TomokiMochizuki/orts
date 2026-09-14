@@ -494,6 +494,12 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `dt` と同じなら、モデル評価の作業が 4 分の 1 ほど増える。([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `orts serve` が、実行中に追加した衛星の持つモデルを報告するようにした。
+  `satellite_added` は `perturbations` を空で通知していて、保持している Info
+  (追加後に接続したクライアントに送るもの) も起動時の snapshot のままだったため、
+  追加した衛星がそこに存在しなかった。両方の追加経路で、構築した系から名前を読み、
+  その snapshot に衛星を記録する。
+  ([#474](https://github.com/sksat/orts/pull/474))
 - CSV の全衛星の行が、header が名前を挙げた列を持つようになった。header は先頭の衛星の
   component から作られ、各衛星の行はその衛星自身の component から書かれていたので、
   衛星ごとに記録している component が違うと行の列数が揃わなかった。2 機のうち先頭だけが magnetorquer の指令を
@@ -998,6 +1004,15 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   wire 型を置き換え、`satellite_added` variant を追加。([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- chunk 単位のファイル読み込みが終わった直後に届いたサンプルが二重に数えられていた。
+  読み込みは各衛星の ingest buffer に trail の配列そのものを置換データとして渡すが、
+  buffer はその参照を保持し、以後の push は別に queue され、両者を連結して返す。
+  そのため間に届いた点が両方に現れていた。snapshot を渡すようにした。
+  ([#474](https://github.com/sksat/orts/pull/474))
+- 実行中に追加した衛星のチャートが出るようにした。`satellite_added` は WebSocket
+  hook までは届いていたが、そこで止まっていたため、チャートの表示条件を作る Info
+  snapshot に追加した衛星が入らず、その衛星の加速度もトルクもチャートが出なかった。
+  ([#474](https://github.com/sksat/orts/pull/474))
 - source の中心天体定数を、source が名乗った天体から解決するか、解決できなければ
   source を拒否するようになった。従来は `mu` と半径がそれぞれ独立に地球へ fallback して
   いたので、Mars を名乗ってどちらも持たない recording が「Mars の `mu` + 地球の半径」

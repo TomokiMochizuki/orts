@@ -11,7 +11,13 @@
 import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import { type OrbitPoint, torqueComponent } from "../orbit.js";
 import type { TrailBuffer } from "../utils/TrailBuffer.js";
-import type { SimInfo, SourceConnectionState, SourceEvent, SourceId } from "./types.js";
+import type {
+  SatelliteInfo,
+  SimInfo,
+  SourceConnectionState,
+  SourceEvent,
+  SourceId,
+} from "./types.js";
 
 // Chart row conversion
 
@@ -112,6 +118,19 @@ function getOrCreateTrailBuffer(map: Map<string, TrailBuffer>, id: string): Trai
   return getOrCreate(map, id, () => trailBufferFactory(id));
 }
 
+/** Hand a buffer the trail as its replacement dataset, as a snapshot.
+ *
+ * `TrailBuffer.getAll()` returns its own array and `markRebuild` retains what
+ * it is given, while later pushes queue separately and `consumeRebuild`
+ * returns the two concatenated — so passing the live array counts anything
+ * that arrives in between twice.
+ */
+function rebuildFromTrails(buffers: RuntimeBuffers): void {
+  for (const [id, buf] of buffers.trailBuffers) {
+    getOrCreateIngestBuffer(buffers.ingestBuffers, id).markRebuild([...buf.getAll()]);
+  }
+}
+
 function getOrCreateIngestBuffer(
   map: Map<string, IngestBufferLike<OrbitPoint>>,
   id: string,
@@ -147,6 +166,23 @@ export function isDataBumpEvent(event: SourceEvent): boolean {
  * Create an event dispatcher that routes SourceEvents into buffers/state.
  * Ignores events from non-active sources (stale event discard).
  */
+/** Put a satellite into an Info snapshot, replacing the entry with its id.
+ *
+ * Replacing in place rather than appending keeps the order stable, so a
+ * repeated announcement does not reorder what the viewer lists. Without a
+ * snapshot there is nothing to merge into: the server sends `info` on connect,
+ * before any announcement.
+ */
+export function upsertSatellite(info: SimInfo | null, satellite: SatelliteInfo): SimInfo | null {
+  if (!info) return info;
+  const at = info.satellites.findIndex((s) => s.id === satellite.id);
+  const satellites =
+    at === -1
+      ? [...info.satellites, satellite]
+      : info.satellites.map((s, i) => (i === at ? satellite : s));
+  return { ...info, satellites };
+}
+
 export function createEventDispatcher(
   buffers: RuntimeBuffers,
   state: RuntimeState,
@@ -158,6 +194,10 @@ export function createEventDispatcher(
     }
 
     switch (event.kind) {
+      case "satellite-added":
+        state.simInfo = upsertSatellite(state.simInfo, event.satellite);
+        break;
+
       case "info":
         state.simInfo = event.info;
         state.serverState = "running";
@@ -220,9 +260,7 @@ export function createEventDispatcher(
             for (const buf of buffers.trailBuffers.values()) buf.clear();
             buffers.chartBuffer.clear();
           }
-          for (const [id, buf] of buffers.trailBuffers) {
-            getOrCreateIngestBuffer(buffers.ingestBuffers, id).markRebuild(buf.getAll());
-          }
+          rebuildFromTrails(buffers);
           buffers.chunkLoadStarted = false; // reset for next load
         }
         break;

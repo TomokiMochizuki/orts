@@ -340,7 +340,10 @@ pub(super) struct ServeEngine {
     group: SimGroup,
     metas: Vec<SatMeta>,
     history: HistoryBuffer,
-    info_json: String,
+    /// The Info message as built, kept typed so a satellite added at runtime
+    /// can be appended to it: `status_data` hands this to every client that
+    /// connects after the add.
+    info: WsMessage,
     /// Ring-buffered queue of `simulation_terminated` payloads, replayed to
     /// late-connecting clients. Bounded by [`TERMINATED_EVENTS_CAP`] to avoid
     /// unbounded growth in long-running sims with many deorbiting satellites.
@@ -565,7 +568,7 @@ impl ServeEngine {
         // for status replay to late-connecting clients).
         let info_msg = build_info_message(&params)?;
         let info_json = serde_json::to_string(&info_msg).expect("failed to serialize info");
-        let mut initial_broadcasts = vec![info_json.clone()];
+        let mut initial_broadcasts = vec![info_json];
 
         // Emit initial states.
         #[allow(clippy::needless_range_loop)]
@@ -669,7 +672,7 @@ impl ServeEngine {
             group,
             metas,
             history,
-            info_json,
+            info: info_msg,
             terminated_events: VecDeque::new(),
             current_t: 0.0,
             steps_done: 0,
@@ -907,6 +910,20 @@ impl ServeEngine {
         })
     }
 
+    /// Record a satellite added at runtime in the retained Info.
+    ///
+    /// A client that connects after the add is sent this snapshot and never
+    /// sees the `satellite_added` broadcast, so without this the satellite is
+    /// missing from its metadata — the models it carries among them.
+    fn remember_satellite(&mut self, satellite: SatelliteInfo) {
+        if let WsMessage::Info { satellites, .. } = &mut self.info {
+            match satellites.iter_mut().find(|s| s.id == satellite.id) {
+                Some(existing) => *existing = satellite,
+                None => satellites.push(satellite),
+            }
+        }
+    }
+
     /// Assemble the status snapshot for a (re)connecting client.
     ///
     /// The history is always a bounded, downsampled overview maintained in
@@ -917,7 +934,7 @@ impl ServeEngine {
     /// [`query_range`](Self::query_range) requests.
     pub(super) fn status_data(&self) -> StatusData {
         StatusData {
-            info_json: self.info_json.clone(),
+            info_json: serde_json::to_string(&self.info).expect("failed to serialize info"),
             terminated_events: self.terminated_events.iter().cloned().collect(),
             history_states: self.history.overview(),
         }
@@ -1047,6 +1064,11 @@ impl ServeEngine {
             self.params.mu,
             self.params.epoch.map(|e| e.add_si_seconds(self.current_t)),
         )?;
+        // Read before the satellite moves into the group: the models it
+        // carries are what the viewer keys its charts on, and this system is
+        // the one that will be integrated.
+        let perturbations: Vec<String> =
+            system.model_names().into_iter().map(String::from).collect();
         self.group
             .push_orbit_satellite(spec.id.as_str(), initial.clone(), self.current_t, system);
 
@@ -1055,9 +1077,10 @@ impl ServeEngine {
             name: spec.name.clone(),
             altitude: spec.altitude(&self.params.body),
             period: spec.period,
-            perturbations: vec![],
+            perturbations,
             shape: spec.shape,
         };
+        self.remember_satellite(sat_info.clone());
         let t = self.current_t;
         let sat_entity_path = spec.entity_path();
 
@@ -1194,6 +1217,13 @@ impl ServeEngine {
         // breakdowns.
         let initial_loads =
             spacecraft_loads(&new_sat.dynamics, self.current_t, &new_sat.state.plant);
+        // Same reason, for the same reader: the models this satellite carries.
+        let perturbations: Vec<String> = new_sat
+            .dynamics
+            .model_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
         self.group.push_controlled_satellite(new_sat);
 
         let sat_info = SatelliteInfo {
@@ -1201,9 +1231,10 @@ impl ServeEngine {
             name: spec.name.clone(),
             altitude: spec.altitude(&self.params.body),
             period: spec.period,
-            perturbations: vec![],
+            perturbations,
             shape: spec.shape,
         };
+        self.remember_satellite(sat_info.clone());
         let t = self.current_t;
         let sat_entity_path = spec.entity_path();
 
@@ -1525,6 +1556,69 @@ orbit = { type = "circular", altitude = 50 }
         assert!(
             first["accelerations"]["gravity"].is_number(),
             "the add-time state should report its accelerations: {first}"
+        );
+
+        // The announcement names the models this satellite carries. The viewer
+        // keys its charts on this list, so an empty one hides every chart the
+        // added satellite would have brought.
+        let announced: serde_json::Value = serde_json::from_str(
+            added
+                .broadcasts
+                .iter()
+                .find(|m| m.contains("satellite_added"))
+                .expect("a satellite_added broadcast"),
+        )
+        .expect("the announcement is JSON");
+        let models: Vec<&str> = announced["satellite"]["perturbations"]
+            .as_array()
+            .expect("perturbations is an array")
+            .iter()
+            .map(|m| m.as_str().expect("a model name"))
+            .collect();
+        // Measured: an orbit-only satellite around Earth carries these three.
+        assert!(
+            models.contains(&"zonal_gravity"),
+            "the added satellite should report its models: {models:?}"
+        );
+        assert!(
+            models.contains(&"third_body_sun") && models.contains(&"third_body_moon"),
+            "including the third bodies the system was built with: {models:?}"
+        );
+    }
+
+    /// A client that connects after the add is sent the retained Info and
+    /// never sees the announcement, so the added satellite has to be in it.
+    #[test]
+    fn a_satellite_added_at_runtime_is_in_the_retained_info() {
+        let mut init = engine_from_toml(ORBIT_ONLY).expect("engine builds");
+        let cfg: SatelliteConfig = serde_json::from_str(
+            r#"{ "id": "sat-b", "orbit": { "type": "circular", "altitude": 700 } }"#,
+        )
+        .expect("valid satellite config");
+        init.engine.add_satellite(cfg).expect("orbit-only add ok");
+
+        let info: serde_json::Value = serde_json::from_str(&init.engine.status_data().info_json)
+            .expect("the retained info is JSON");
+        let ids: Vec<&str> = info["satellites"]
+            .as_array()
+            .expect("satellites is an array")
+            .iter()
+            .map(|s| s["id"].as_str().expect("an id"))
+            .collect();
+        assert!(
+            ids.iter().any(|id| id.contains("sat-b")),
+            "the added satellite should be in the retained info: {ids:?}"
+        );
+
+        let added = info["satellites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"].as_str().unwrap().contains("sat-b"))
+            .unwrap();
+        assert!(
+            !added["perturbations"].as_array().unwrap().is_empty(),
+            "and with the models it carries: {added}"
         );
     }
 
