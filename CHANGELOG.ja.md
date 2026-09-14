@@ -512,7 +512,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 
 #### Fixed
 - 同じ RRD に対して `orts replay` を 2 回実行すると、viewer に送るメッセージの中身が違っていた。
-  読み込んだ状態を entity path を鍵にした `HashMap` でまとめていたためで、その反復順に従っていたのは次の 3 つ。`Info` メッセージの衛星の
+  読み込んだ状態を entity path ごとに `HashMap` でまとめていたためで、その反復順に従っていたのは次の 3 つ。`Info` メッセージの衛星の
   並び、median のサンプル間隔を `dt` として採る entity、そして同じ時刻を持つサンプル同士の順序 —
   overview・`all_states`・`query_range` の応答はいずれも entity ごとの列を統合してから `t` で
   安定ソートするので、同時刻の中では反復順がそのまま残る。`BTreeMap` に替えて、どれも entity
