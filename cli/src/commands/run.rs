@@ -1078,6 +1078,57 @@ fn lookup_field_names(component_name: &str, n: usize) -> Vec<String> {
     (0..n).map(|i| format!("{short}_{i}")).collect()
 }
 
+/// Where a controlled run has to sample, and therefore where its spans end.
+///
+/// The controlled loop's spans used to end only at controller ticks, which left
+/// `output_interval` with no effect on the samples: the fleet clock is the one
+/// that moves, so an output boundary has to be one of its stops.
+///
+/// `at()` is `n * interval` rather than a running sum: adding the interval each
+/// time falls below the multiple (measured on the tick schedule in #369), and
+/// the samples of a long run would drift off the times the config asked for.
+#[derive(Debug)]
+struct OutputSchedule {
+    interval: f64,
+    duration: f64,
+    done: u64,
+}
+
+impl OutputSchedule {
+    fn new(interval: f64, duration: f64) -> Self {
+        Self {
+            interval,
+            duration,
+            done: 0,
+        }
+    }
+
+    /// The next boundary to sample at.
+    fn at(&self) -> f64 {
+        (self.done + 1) as f64 * self.interval
+    }
+
+    /// End of a span that starts at the current time: the earliest of the next
+    /// fleet event, the next output boundary, and the run's end.
+    fn span_end(&self, next_event_t: f64) -> f64 {
+        next_event_t.min(self.at()).min(self.duration)
+    }
+
+    /// Whether `t` has reached the boundary.
+    ///
+    /// Strict: a span that ends at a boundary is given that `f64` itself, so
+    /// there is no arithmetic to absorb — and a tolerance would let a fleet
+    /// event just before the boundary consume it. With `interval = 0.1` the
+    /// third boundary is 0.30000000000000004, and a tick at 0.3 is not it.
+    fn due(&self, t: f64) -> bool {
+        t >= self.at()
+    }
+
+    fn taken(&mut self) {
+        self.done += 1;
+    }
+}
+
 /// 制御付きシミュレーション（プラグインコントローラ + RW + センサ）。
 fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Recording, CmdError> {
     use crate::sim::controlled::{ControlledBuildContext, build_controlled_satellite};
@@ -1224,11 +1275,19 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
 
     let mut t = 0.0;
     let mut step: u64 = 1;
-    let mut next_output_t = params.output_interval;
+    let mut output = OutputSchedule::new(params.output_interval, duration);
     let mut last_output_t = 0.0;
 
-    while t < duration - 1e-12 {
-        let next_t = crate::sim::controlled::next_fleet_event_t(&satellites, duration);
+    // Strict: `n * output_interval` can land just below `duration` (3 × 0.3 is
+    // 0.8999999999999999), and a tolerance here would end the run there and
+    // leave `duration` itself unrecorded.
+    while t < duration {
+        // The span ends at whichever comes first: a controller tick, the next
+        // output boundary, or the end of the run. `advance_controlled` still
+        // runs the ticks that fall inside it, so a boundary that arrives first
+        // only shortens the span.
+        let fleet_event_t = crate::sim::controlled::next_fleet_event_t(&satellites, duration);
+        let next_t = output.span_end(fleet_event_t);
         let dt = next_t - t;
 
         // 時刻指定コマンド: この区間の終端 (next_t) までに due なものを
@@ -1331,10 +1390,15 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         t = next_t;
 
         // 可視性は出力間引きと独立に、制御 tick ごとにサンプリングする。
+        // したがって出力境界だけで終わった span では feed しない: そうしないと
+        // `output_interval` を変えるだけで AOS/LOS の補間や短い pass の検出が
+        // 変わってしまう。
+        //
         // 全機終了の判定より前に置く: そうしないと、最後の衛星が終了した区間
         // では終了状態が monitor に渡らず、同じ衛星の contact window の終端が
         // 「ほかに生存機がいるか」で変わってしまう。
-        if let Some(monitors) = visibility.as_mut() {
+        let at_fleet_event = next_t >= fleet_event_t || next_t >= duration;
+        if let Some(monitors) = visibility.as_mut().filter(|_| at_fleet_event) {
             feed_visibility(
                 monitors,
                 &mut vis_last_t,
@@ -1347,7 +1411,7 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             );
         }
 
-        if t >= next_output_t - 1e-12 {
+        if output.due(t) {
             for (i, sat) in satellites
                 .iter()
                 .enumerate()
@@ -1358,7 +1422,7 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             }
             step += 1;
             last_output_t = t;
-            next_output_t += params.output_interval;
+            output.taken();
         }
 
         if satellites.iter().all(|sat| sat.terminated.is_some()) {
@@ -1368,7 +1432,10 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
 
     // 最終状態を記録（output_interval と duration が割り切れない場合）。
     // 終了した衛星は終了時刻で 1 度記録済みなので除く。
-    if (t - last_output_t) > 1e-9 {
+    //
+    // 条件は「その時刻をまだ記録していないか」。差の閾値では、最後の出力境界が
+    // duration の 1 ns 内に来たときに最終状態が落ちる。
+    if t != last_output_t {
         for (i, sat) in satellites
             .iter()
             .enumerate()
@@ -1990,6 +2057,121 @@ mod tests {
                 row.ends_with(",,,"),
                 "the satellite without the model should leave the three fields empty: {row}"
             );
+        }
+    }
+
+    /// Walk the schedule the way the loop does: spans end where it says, and a
+    /// sample is taken whenever one is due.
+    ///
+    /// `ticks` is the controller period of the one satellite in the fleet, so
+    /// the next fleet event is the next multiple of it.
+    fn walk_schedule(interval: f64, duration: f64, tick_period: f64) -> ScheduleWalk {
+        let mut output = OutputSchedule::new(interval, duration);
+        let mut taken: Vec<f64> = Vec::new();
+        let mut t = 0.0;
+        let mut last_output_t = 0.0;
+        let mut ticks_done = 0u64;
+        while t < duration {
+            let next_tick = (ticks_done + 1) as f64 * tick_period;
+            let next_t = output.span_end(next_tick.min(duration));
+            assert!(next_t > t, "the clock stalled at {t}");
+            t = next_t;
+            if t >= next_tick {
+                ticks_done += 1;
+            }
+            if output.due(t) {
+                taken.push(t);
+                last_output_t = t;
+                output.taken();
+            }
+        }
+        ScheduleWalk {
+            // The loop's tail records the final state when the run's last
+            // instant is not already a sample.
+            tail_fires: t != last_output_t,
+            end_t: t,
+            taken,
+        }
+    }
+
+    struct ScheduleWalk {
+        taken: Vec<f64>,
+        end_t: f64,
+        tail_fires: bool,
+    }
+
+    fn sample_times(interval: f64, duration: f64, tick_period: f64) -> Vec<f64> {
+        walk_schedule(interval, duration, tick_period).taken
+    }
+
+    #[test]
+    fn an_output_interval_below_the_controller_period_still_samples() {
+        // The defect: with spans ending only at ticks, a 0.1 s interval under a
+        // 1 s controller sampled once a second.
+        let taken = sample_times(0.1, 1.0, 1.0);
+        assert_eq!(taken.len(), 10, "got {taken:?}");
+        for (i, t) in taken.iter().enumerate() {
+            let expected = (i + 1) as f64 * 0.1;
+            assert!(
+                (t - expected).abs() < 1e-12,
+                "sample {i} at {t}, want {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_output_interval_above_the_controller_period_samples_at_its_own_rate() {
+        let taken = sample_times(2.0, 6.0, 1.0);
+        assert_eq!(taken, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn an_interval_that_does_not_divide_the_period_keeps_its_own_boundaries() {
+        let taken = sample_times(0.3, 1.2, 1.0);
+        assert_eq!(taken.len(), 4, "got {taken:?}");
+        for (i, t) in taken.iter().enumerate() {
+            let expected = (i + 1) as f64 * 0.3;
+            assert!(
+                (t - expected).abs() < 1e-12,
+                "sample {i} at {t}, want {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_duration_that_is_not_a_multiple_ends_on_it_and_the_tail_records_it() {
+        let walk = walk_schedule(0.4, 1.0, 1.0);
+        // 0.4 and 0.8 are sampled; the boundary at 1.2 is past the run, so the
+        // last span ends at 1.0 and the tail is what records it.
+        assert_eq!(walk.taken.len(), 2, "got {:?}", walk.taken);
+        assert!((walk.taken[1] - 0.8).abs() < 1e-12);
+        assert_eq!(walk.end_t, 1.0, "the run has to reach its duration");
+        assert!(walk.tail_fires, "the state at 1.0 would not be recorded");
+    }
+
+    #[test]
+    fn a_boundary_just_below_the_duration_does_not_end_the_run() {
+        // 3 × 0.3 is 0.8999999999999999: sampling there must not be mistaken
+        // for reaching 0.9, or the run's last state is 1e-16 short of it.
+        let walk = walk_schedule(0.3, 0.9, 1.0);
+        assert_eq!(walk.taken.len(), 3, "got {:?}", walk.taken);
+        assert!(
+            walk.taken[2] < 0.9,
+            "the third boundary is {} , which is not 0.9",
+            walk.taken[2]
+        );
+        assert_eq!(walk.end_t, 0.9, "the run has to reach its duration");
+        assert!(walk.tail_fires, "0.9 itself would never be recorded");
+    }
+
+    #[test]
+    fn the_boundaries_do_not_drift_over_a_long_run() {
+        // A running sum falls below the multiple; the counter cannot.
+        let mut output = OutputSchedule::new(0.1, 1e5);
+        for n in 1..=100_000u64 {
+            let expected = n as f64 * 0.1;
+            assert_eq!(output.at(), expected, "boundary {n} drifted");
+            output.taken();
         }
     }
 
