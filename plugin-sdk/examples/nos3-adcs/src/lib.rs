@@ -149,7 +149,8 @@ impl Controller {
                         pwrite!(self.di.fss, valid, 1u8);
                         pwrite!(self.di.fss, svb, [dir.x, dir.y, dir.z]);
                     } else {
-                        // Eclipse: no sun direction available
+                        // No direction: an eclipse, or a measurement that
+                        // has none (illumination tells the two apart)
                         pwrite!(self.di.fss, valid, 0u8);
                     }
                 }
