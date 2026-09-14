@@ -622,6 +622,15 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `orts replay` produced a different answer on each start, because it grouped
+  the loaded states in a `HashMap` keyed by entity path. What followed that
+  iteration order: the satellite list in the `Info` message, the entity whose
+  median sample interval became `dt`, and the order of samples that share a
+  timestamp — the overview, `all_states` and a `query_range` reply all merge
+  per-entity slices and then sort by `t` with a stable sort, which leaves the
+  iteration order in place among equal timestamps. The map is now a `BTreeMap`,
+  so each of those follows entity-path order.
+  ([#441](https://github.com/sksat/orts/issues/441))
 - `orts serve` reports the models a satellite added at runtime carries.
   `satellite_added` announced an empty `perturbations` list, and the retained
   Info — what a client connecting after the add is sent — still held the

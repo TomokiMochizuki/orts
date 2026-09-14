@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::Router;
@@ -19,8 +19,11 @@ use crate::sim::core::{HistoryState, ModelLoads, downsample_states, make_history
 /// Pre-loaded replay data shared across connections.
 struct ReplayData {
     info_json: String,
-    /// States grouped by entity_path, each sorted by t.
-    states_by_entity: HashMap<String, Vec<HistoryState>>,
+    /// States grouped by entity_path, each sorted by t. Ordered by path, so
+    /// everything derived from it — the Info satellite list, the entity
+    /// `estimate_dt` reads, the overview's order among equal timestamps — is
+    /// the same on every run.
+    states_by_entity: BTreeMap<String, Vec<HistoryState>>,
     /// All states merged and sorted by t.
     all_states: Vec<HistoryState>,
     /// Central body name (e.g. "earth") for texture downloads.
@@ -54,7 +57,7 @@ fn load_replay_data(path: &str) -> ReplayData {
     let central_body = meta.body_name.as_deref().unwrap_or("earth").to_lowercase();
 
     // Convert RRD rows to HistoryState, grouped by entity_path
-    let mut states_by_entity: HashMap<String, Vec<HistoryState>> = HashMap::new();
+    let mut states_by_entity: BTreeMap<String, Vec<HistoryState>> = BTreeMap::new();
 
     for row in &rrd.rows {
         let entity_path = row
@@ -110,25 +113,7 @@ fn load_replay_data(path: &str) -> ReplayData {
     let entity_count = states_by_entity.len();
     let dt = estimate_dt(&states_by_entity);
 
-    let satellites: Vec<SatelliteInfo> = states_by_entity
-        .keys()
-        .map(|ep_str| {
-            let ep = EntityPath::parse(ep_str);
-            let states = &states_by_entity[ep_str];
-            let first = &states[0];
-            let r_mag =
-                (first.position[0].powi(2) + first.position[1].powi(2) + first.position[2].powi(2))
-                    .sqrt();
-            SatelliteInfo {
-                id: ep.to_string(),
-                name: Some(ep.name().to_string()),
-                altitude: r_mag - body_radius,
-                period: 0.0,
-                perturbations: vec![],
-                shape: None,
-            }
-        })
-        .collect();
+    let satellites = satellite_infos(&states_by_entity, body_radius);
 
     let info_msg = WsMessage::Info {
         mu,
@@ -156,8 +141,36 @@ fn load_replay_data(path: &str) -> ReplayData {
     }
 }
 
-/// Estimate dt from median time step within the first entity.
-fn estimate_dt(states_by_entity: &HashMap<String, Vec<HistoryState>>) -> f64 {
+/// One `SatelliteInfo` per entity, in entity-path order.
+///
+/// `period` is 0: the RRD's metadata carries the period of the first satellite
+/// only, and replay does not read it yet (see #441).
+fn satellite_infos(
+    states_by_entity: &BTreeMap<String, Vec<HistoryState>>,
+    body_radius: f64,
+) -> Vec<SatelliteInfo> {
+    states_by_entity
+        .iter()
+        .map(|(ep_str, states)| {
+            let ep = EntityPath::parse(ep_str);
+            let first = &states[0];
+            let r_mag =
+                (first.position[0].powi(2) + first.position[1].powi(2) + first.position[2].powi(2))
+                    .sqrt();
+            SatelliteInfo {
+                id: ep.to_string(),
+                name: Some(ep.name().to_string()),
+                altitude: r_mag - body_radius,
+                period: 0.0,
+                perturbations: vec![],
+                shape: None,
+            }
+        })
+        .collect()
+}
+
+/// Estimate dt from the median time step of the first entity by path.
+fn estimate_dt(states_by_entity: &BTreeMap<String, Vec<HistoryState>>) -> f64 {
     for states in states_by_entity.values() {
         if states.len() >= 2 {
             let mut dts: Vec<f64> = states
@@ -181,7 +194,7 @@ fn build_overview(data: &ReplayData, max_points: usize) -> Vec<HistoryState> {
 
 /// Downsample each entity independently, then merge. Guarantees total <= max_points.
 fn downsample_per_entity(
-    by_entity: &HashMap<String, Vec<HistoryState>>,
+    by_entity: &BTreeMap<String, Vec<HistoryState>>,
     max_points: usize,
 ) -> Vec<HistoryState> {
     let entity_count = by_entity.len().max(1);
@@ -352,7 +365,7 @@ fn handle_query_range(
     match max_points {
         Some(mp) => {
             let owned: Vec<HistoryState> = filtered.into_iter().cloned().collect();
-            let mut by_entity: HashMap<String, Vec<HistoryState>> = HashMap::new();
+            let mut by_entity: BTreeMap<String, Vec<HistoryState>> = BTreeMap::new();
             for s in owned {
                 by_entity
                     .entry(s.entity_path.to_string())
@@ -382,9 +395,98 @@ mod tests {
         )
     }
 
+    /// Eight paths, so an arbitrary order is essentially never the sorted one.
+    fn eight_entities(interval_of_first: f64) -> BTreeMap<String, Vec<HistoryState>> {
+        let mut by_entity = BTreeMap::new();
+        for i in (0..8).rev() {
+            let path = format!("/world/sat/s{i}");
+            // the first path by order gets its own sample interval, the rest another
+            let step = if i == 0 { interval_of_first } else { 7.0 };
+            let states = (0..3)
+                .map(|k| make_test_state(&path, k as f64 * step))
+                .collect();
+            by_entity.insert(path, states);
+        }
+        by_entity
+    }
+
+    #[test]
+    fn the_info_message_lists_satellites_in_entity_path_order() {
+        let by_entity = eight_entities(60.0);
+        let ids: Vec<String> = satellite_infos(&by_entity, 6378.137)
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        let expected: Vec<String> = (0..8).map(|i| format!("/world/sat/s{i}")).collect();
+        assert_eq!(
+            ids, expected,
+            "the order a client sees must not vary per run"
+        );
+    }
+
+    #[test]
+    fn estimate_dt_reads_the_first_entity_by_path() {
+        let dt = estimate_dt(&eight_entities(60.0));
+        assert!(
+            (dt - 60.0).abs() < 1e-9,
+            "expected the interval of /world/sat/s0, got {dt}"
+        );
+    }
+
+    /// Eight entities sampled at the same instants, inserted in reverse.
+    fn eight_entities_same_instants() -> BTreeMap<String, Vec<HistoryState>> {
+        let mut by_entity = BTreeMap::new();
+        for i in (0..8).rev() {
+            let path = format!("/world/sat/s{i}");
+            let states = (0..3)
+                .map(|k| make_test_state(&path, k as f64 * 60.0))
+                .collect();
+            by_entity.insert(path, states);
+        }
+        by_entity
+    }
+
+    fn paths_at(states: &[HistoryState], t: f64) -> Vec<String> {
+        states
+            .iter()
+            .filter(|s| s.t == t)
+            .map(|s| s.entity_path.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_overview_breaks_ties_in_entity_path_order() {
+        // The merge is a stable sort by t, so the order among equal t is the
+        // order the entities were iterated in.
+        let overview = downsample_per_entity(&eight_entities_same_instants(), 64);
+        let expected: Vec<String> = (0..8).map(|i| format!("/world/sat/s{i}")).collect();
+        assert_eq!(
+            paths_at(&overview, 0.0),
+            expected,
+            "samples sharing a timestamp must come out in a fixed order"
+        );
+    }
+
+    #[test]
+    fn a_downsampled_query_range_breaks_ties_in_entity_path_order() {
+        let by_entity = eight_entities_same_instants();
+        let mut all_states: Vec<HistoryState> =
+            by_entity.values().flat_map(|v| v.iter().cloned()).collect();
+        all_states.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        let data = ReplayData {
+            info_json: String::new(),
+            states_by_entity: by_entity,
+            all_states,
+            central_body: "earth".to_string(),
+        };
+        let range = handle_query_range(&data, 0.0, 120.0, Some(64), None);
+        let expected: Vec<String> = (0..8).map(|i| format!("/world/sat/s{i}")).collect();
+        assert_eq!(paths_at(&range, 60.0), expected);
+    }
+
     #[test]
     fn estimate_dt_from_states() {
-        let mut by_entity = HashMap::new();
+        let mut by_entity = BTreeMap::new();
         by_entity.insert(
             "/world/sat/test".to_string(),
             vec![
@@ -399,7 +501,7 @@ mod tests {
 
     #[test]
     fn overview_downsamples_per_entity() {
-        let mut by_entity = HashMap::new();
+        let mut by_entity = BTreeMap::new();
         let sat_states: Vec<HistoryState> = (0..100)
             .map(|i| make_test_state("/world/sat/apollo11", i as f64 * 60.0))
             .collect();
@@ -438,7 +540,7 @@ mod tests {
 
     #[test]
     fn query_range_filters_and_downsamples() {
-        let mut by_entity = HashMap::new();
+        let mut by_entity = BTreeMap::new();
         let states: Vec<HistoryState> = (0..100)
             .map(|i| make_test_state("/world/sat/test", i as f64 * 10.0))
             .collect();

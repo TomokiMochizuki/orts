@@ -511,6 +511,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `dt` と同じなら、モデル評価の作業が 4 分の 1 ほど増える。([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `orts replay` が起動ごとに違う答えを返していた。読み込んだ状態を entity path を鍵にした
+  `HashMap` でまとめていたためで、その反復順に従っていたのは次の 3 つ。`Info` メッセージの衛星の
+  並び、median のサンプル間隔を `dt` として採る entity、そして同じ時刻を持つサンプル同士の順序 —
+  overview・`all_states`・`query_range` の応答はいずれも entity ごとの列を統合してから `t` で
+  安定ソートするので、同時刻の中では反復順がそのまま残る。`BTreeMap` に替えて、どれも entity
+  path の順になった。
+  ([#441](https://github.com/sksat/orts/issues/441))
 - `orts serve` が、実行中に追加した衛星の持つモデルを報告するようにした。
   `satellite_added` は `perturbations` を空で通知していて、保持している Info
   (追加後に接続したクライアントに送るもの) も起動時の snapshot のままだったため、
