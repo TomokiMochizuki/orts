@@ -529,6 +529,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `dt` と同じなら、モデル評価の作業が 4 分の 1 ほど増える。([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `mode = "controlled"` が、controller が `output_interval` より遅いと `output_interval` を
+  無視していた。span の終端が controller tick か `duration` だけだったので、controller period 1 s
+  に対して `output_interval = 0.1` と書いてもサンプルは 1 s ごとで、しかも記録される時刻は出力
+  境界ではなく tick の時刻だった。`next_output_t` も 1 回の発火で 1 回しか進まないため、tick ごとに
+  `t` から離れていった。span は「次の fleet event・次の出力境界・`duration`」の最も早いところで
+  終わるようにし、出力境界は累積加算でなく counter による `n * interval` で置いた(累積は 6 回目から
+  倍数を下回る)。
+  ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` が、地表に衝突した衛星や大気圏に入った衛星を止めていなかった。
   orbit-only と spacecraft は `body_event_checker` を `IndependentGroup` に渡すが、controlled の
   ループは終了判定なしで積分していた(adaptive 側は `Continue` 固定の closure、`Rk4` は hook のない

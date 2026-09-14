@@ -646,6 +646,16 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `mode = "controlled"` ignored `output_interval` whenever the controller was
+  slower than it: a span ended only at a controller tick or at `duration`, so
+  with a 1 s controller period an `output_interval` of 0.1 still sampled once a
+  second, and each sample carried the tick's time rather than the boundary's.
+  `next_output_t` also advanced once per firing, so it fell further behind `t`
+  on every tick. A span now ends at the earliest of the next fleet event, the
+  next output boundary and `duration`, and the boundary is `n * interval` from
+  a counter rather than a running sum, which drifts below the multiple from the
+  sixth step on.
+  ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` never stopped a satellite that hit the surface or
   entered the atmosphere. orbit-only and spacecraft hand `body_event_checker`
   to `IndependentGroup`; the controlled loop integrated with no predicate — the
