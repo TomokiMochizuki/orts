@@ -823,8 +823,9 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `earth::ERA_RATE` として追加した。**`OMEGA` の値が変わる**: 従来の `7.2921159e-5` は、doc が
   引用していた IERS 2010 の値でも、IAU 2006 chain が回る速度でもなく、歳差する春分点に対する
   自転速度だった。`EarthFixedTransform` は速度変換に `ERA_RATE` を使う — 微分する `R` 段の
-  速度がそれだからである。実測すると両者は `7.53e-12` rad/s 違い、state transform の snapshot の
-  自転軸垂直半径 6403 km では 0.0482 mm/s に相当する。どちらの定数も地球の自転項だけを表す:
+  速度がそれだからである。実測すると、`OMEGA` が従来持っていた値と `ERA_RATE` は `7.53e-12` rad/s
+  違い、state transform の snapshot の自転軸垂直半径 6403 km では 0.0482 mm/s に相当する。
+  訂正後の `OMEGA` と `ERA_RATE` の差は `1.47e-12` rad/s である。どちらの定数も地球の自転項だけを表す:
   `W·R·Q` 全体の微分は `Q̇` / `Ẇ` と LOD 補正も持つが、この変換はそれらを従来から含んでいない。
   `OMEGA` は `MU` や `R` と並ぶ測地系の定数として残る。([#480](https://github.com/sksat/orts/pull/480))
 - `era_formula` のコメントが、arika の係数は canonical な SOFA 値 `1.00273781191135448` と

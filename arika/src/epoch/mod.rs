@@ -49,6 +49,9 @@ mod precision;
 mod scale;
 
 pub use convert::{FixedOffsetFromTai, Ut1Epoch};
+// The ERA coefficients, so `earth::ERA_RATE` differentiates the same numbers
+// `era_formula` integrates.
+pub(crate) use convert::ERA_TURNS_PER_UT1_DAY;
 pub use datetime::DateTime;
 pub use duration::Duration;
 pub use gps::{GpsWeek, SecondsOfWeek};

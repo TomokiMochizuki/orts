@@ -68,9 +68,9 @@ pub const OMEGA: f64 = 7.292_115e-5;
 /// Rate the Earth Rotation Angle advances at [rad per UT1 second].
 ///
 /// The derivative of the ERA expression (IAU 2000 Resolution B1.8; IERS
-/// Conventions 2010 Eq. 5.14): `2π × 1.00273781191135448 / 86400`. The
-/// coefficient below is that value as an f64 — the two spellings round to the
-/// same bits, and this is the one that survives a round trip.
+/// Conventions 2010 Eq. 5.14): `2π × 1.00273781191135448 / 86400`. Built from
+/// the same [`ERA_TURNS_PER_UT1_DAY`](crate::epoch::ERA_TURNS_PER_UT1_DAY) the
+/// angle itself is built from, so the two cannot drift apart.
 ///
 /// **This is the ERA step alone.** The IAU 2006 rotation is `W·R·Q`, and its
 /// full time derivative also carries the precession/nutation and polar-motion
@@ -80,7 +80,7 @@ pub const OMEGA: f64 = 7.292_115e-5;
 /// rates are sub-µrad/s. Transporting velocities with [`OMEGA`] instead left
 /// even that term disagreeing with the `R` it differentiates, by
 /// `1.47e-12 rad/s` — 0.0103 mm/s at 7000 km.
-pub const ERA_RATE: f64 = core::f64::consts::TAU * 1.002_737_811_911_354_6 / 86_400.0;
+pub const ERA_RATE: f64 = core::f64::consts::TAU * crate::epoch::ERA_TURNS_PER_UT1_DAY / 86_400.0;
 
 #[cfg(test)]
 mod tests {
@@ -106,12 +106,27 @@ mod tests {
         assert_eq!(OMEGA, 7_292_115e-11);
     }
 
-    /// `ERA_RATE` is the derivative of the ERA expression, so it is pinned to
-    /// that expression's own coefficient rather than to a rounded figure.
+    /// `ERA_RATE` has to be the slope of the angle the crate actually computes.
+    /// Repeating the coefficient here would only restate the definition, and
+    /// would not notice the two copies drifting — which is the shape of the
+    /// mix-up this constant exists to end. So the rate is compared against a
+    /// difference of [`Ut1Epoch::era`](crate::epoch::Ut1Epoch::era) instead.
     #[test]
-    fn era_rate_is_the_era_coefficient_per_second() {
-        let expected = core::f64::consts::TAU * 1.002_737_811_911_354_6 / 86_400.0;
-        assert_eq!(ERA_RATE, expected);
+    fn era_rate_is_the_slope_of_the_era_it_belongs_to() {
+        use crate::epoch::Ut1Epoch;
+
+        // A whole UT1 day, so the difference is the per-day advance. The ERA
+        // wraps at 2π, and one day is 1.0027 turns, so the wrap is added back.
+        let jd = 2_460_390.0;
+        let advance = Ut1Epoch::from_jd_ut1(jd + 1.0).era() - Ut1Epoch::from_jd_ut1(jd).era()
+            + core::f64::consts::TAU;
+        let from_rate = ERA_RATE * 86_400.0;
+        // `era()` wraps a value of ~5.6e4 rad, where f64 spacing is 7.3e-12,
+        // and two of those are differenced: 2 ulps. Measured residual 2.4e-12.
+        assert!(
+            (advance - from_rate).abs() < 1.5e-11,
+            "the rate is not the angle's slope: {advance:e} vs {from_rate:e}"
+        );
     }
 
     /// The two are close enough that swapping them passes most numerical

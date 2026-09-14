@@ -335,17 +335,27 @@ impl Ut1Epoch {
     }
 }
 
+/// ERA at J2000, in turns (IAU 2000 Resolution B1.8).
+pub(crate) const ERA_TURNS_AT_J2000: f64 = 0.7790572732640;
+
+/// Turns the ERA advances per UT1 day (IAU 2000 Resolution B1.8; IERS
+/// Conventions 2010 Eq. 5.14).
+///
+/// The canonical SOFA spelling is `1.00273781191135448`; it and the shorter
+/// form below round to the same f64 (`0x3ff00b36cdc9f32b`), and this is the one
+/// that survives a round trip. [`earth::ERA_RATE`](crate::earth::ERA_RATE) is
+/// this value divided by the seconds in a day.
+pub(crate) const ERA_TURNS_PER_UT1_DAY: f64 = 1.002_737_811_911_354_6;
+
 /// Earth Rotation Angle (ERA) formula, shared by `Ut1Epoch::era` and the
 /// legacy `Epoch<Utc>::gmst` method.
 ///
-/// The coefficient below is the canonical SOFA value: `1.00273781191135448`
-/// and the shorter `1.002_737_811_911_354_6` written here round to the same
-/// f64 (`0x3ff00b36cdc9f32b`), so there is nothing to adopt later.
-/// [`earth::ERA_RATE`](crate::earth::ERA_RATE) is this coefficient's
-/// derivative form.
+/// Built from [`ERA_TURNS_AT_J2000`] and [`ERA_TURNS_PER_UT1_DAY`], the same
+/// coefficients [`earth::ERA_RATE`](crate::earth::ERA_RATE) differentiates, so
+/// the angle and the rate cannot drift apart.
 pub(super) fn era_formula(ut1_jd: f64) -> f64 {
     let du = ut1_jd - J2000_JD;
-    let era = TAU * (0.7790572732640 + 1.002_737_811_911_354_6 * du);
+    let era = TAU * (ERA_TURNS_AT_J2000 + ERA_TURNS_PER_UT1_DAY * du);
     let era = era % TAU;
     if era < 0.0 { era + TAU } else { era }
 }

@@ -972,8 +972,10 @@ section is subdivided by package.
   nor the rate the IAU 2006 chain rotates at, but the rotation rate relative to
   the precessing equinox. `EarthFixedTransform` transports velocities with
   `ERA_RATE` now, since that is the derivative of the `R` step it differentiates
-  — measured, the two disagreed by `7.53e-12` rad/s, which is 0.0482 mm/s at the
-  6403 km cross-axis radius of the state-transform snapshots. Both constants
+  — measured, the value `OMEGA` used to hold and `ERA_RATE` disagree by
+  `7.53e-12` rad/s, which is 0.0482 mm/s at the 6403 km cross-axis radius of the
+  state-transform snapshots. The corrected `OMEGA` and `ERA_RATE` differ by
+  `1.47e-12` rad/s. Both constants
   describe the Earth-spin term alone: the full derivative of `W·R·Q` also
   carries `Q̇`/`Ẇ` and a LOD correction, which this transform has never
   included. `OMEGA` stays as the geodetic constant beside `MU` and `R`. ([#480](https://github.com/sksat/orts/pull/480))
