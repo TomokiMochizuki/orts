@@ -336,8 +336,14 @@ export function App() {
   }, [textureBaseUrl]);
 
   // Values derived from the simulation metadata (with absent-simInfo defaults).
-  const { centralBody, centralBodyRadius, epochJd, satelliteNames, activePerturbations } =
-    useSimInfoDerived(simInfo);
+  const {
+    centralBody,
+    centralBodyRadius,
+    epochJd,
+    satelliteNames,
+    activePerturbations,
+    activeTorqueModels,
+  } = useSimInfoDerived(simInfo);
 
   // Sim-declared marker shapes (from SatelliteInfo); the viewer can override these.
   const satelliteSimShapes = useMemo(() => {
@@ -519,6 +525,7 @@ export function App() {
           onTimeRangeChange={setTimeRange}
           onZoom={simData.handleChartZoom}
           activePerturbations={activePerturbations}
+          activeTorqueModels={activeTorqueModels}
         />
       )}
 

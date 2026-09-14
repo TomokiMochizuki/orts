@@ -82,9 +82,9 @@ export function rrdMetadataToSimInfo(
       name,
       altitude: metadata.altitude ?? 0,
       period: metadata.period ?? 0,
-      // What the charts key on. A recording that carries a model's torque
-      // makes that model's chart appear, as a live run's `perturbations` does.
-      perturbations: [...(torqueModels?.get(path) ?? [])],
+      // A recording has no acceleration columns, so it reports no models
+      // here: the torques it does carry are reported as such below.
+      perturbations: [] as string[],
       shape: null,
     };
   });
@@ -110,5 +110,9 @@ export function rrdMetadataToSimInfo(
     central_body_radius: centralBody.bodyRadius,
     epoch_jd: metadata.epoch_jd ?? null,
     satellites,
+    // What this recording can chart a torque for, per satellite.
+    torqueModels: torqueModels
+      ? Object.fromEntries([...torqueModels].map(([id, models]) => [id, [...models]]))
+      : undefined,
   };
 }

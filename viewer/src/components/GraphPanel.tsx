@@ -38,6 +38,8 @@ interface GraphPanelProps {
   onZoom?: (tMin: number, tMax: number) => void;
   /** Active perturbation names from SimInfo (union across all satellites). */
   activePerturbations?: string[];
+  /** Models whose torque can be charted — see `deriveSimInfo`. */
+  activeTorqueModels?: string[];
 }
 
 export const GraphPanel = memo(function GraphPanel({
@@ -48,6 +50,7 @@ export const GraphPanel = memo(function GraphPanel({
   onTimeRangeChange,
   onZoom,
   activePerturbations,
+  activeTorqueModels,
 }: GraphPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -67,8 +70,8 @@ export const GraphPanel = memo(function GraphPanel({
   // three body-frame components as series: what a torque model gets wrong is
   // the direction, which a magnitude cannot show.
   const visibleTorqueDefs = useMemo(
-    () => TORQUE_CHART_DEFS.filter((def) => isTorqueChartActive(def.model, activePerturbations)),
-    [activePerturbations],
+    () => TORQUE_CHART_DEFS.filter((def) => isTorqueChartActive(def.model, activeTorqueModels)),
+    [activeTorqueModels],
   );
 
   // One `MultiSeriesData` per model. In a fleet the series dimension is

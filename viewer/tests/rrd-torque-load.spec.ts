@@ -100,4 +100,13 @@ test("an .rrd carrying per-model torque shows its torque charts", async ({ page 
   const values = await measured.jsonValue();
   console.log("torque from the recording:", JSON.stringify(values));
   expect(values.max).toBeGreaterThan(1e-5);
+
+  // A recording carries no acceleration columns, and the chart rows fill a
+  // missing acceleration with zero, so an acceleration chart here would draw a
+  // flat zero as if it had been measured. Reporting the recording's torque
+  // models as `perturbations` did exactly that: Gravity, Drag, SRP and Total
+  // appeared with `accel_gravity = [0, 0, 0]`.
+  for (const accelChart of ["Gravity", "Drag", "SRP", "Total Perturbation"]) {
+    await expect(titled(accelChart)).toHaveCount(0);
+  }
 });
