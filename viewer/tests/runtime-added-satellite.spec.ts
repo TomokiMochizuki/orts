@@ -202,13 +202,18 @@ test("a satellite added at runtime brings the charts for its own models", async 
       if (at === -1) return null;
       let before = 0;
       let after = 0;
+      let earliest = Number.POSITIVE_INFINITY;
       altitude.values[at].forEach((v, i) => {
         if (!Number.isFinite(v)) return;
-        if (altitude.t[i] < addTime) before++;
-        else after++;
+        if (altitude.t[i] < addTime) {
+          before++;
+          earliest = Math.min(earliest, altitude.t[i]);
+        } else {
+          after++;
+        }
       });
       if (after === 0) return null;
-      return { labels, before, after };
+      return { labels, before, after, earliest, addTime };
     },
     addT,
     { timeout: 40000 },
@@ -217,7 +222,10 @@ test("a satellite added at runtime brings the charts for its own models", async 
   console.log("aligned chart data:", JSON.stringify(measured));
   expect(measured.labels.some((l: string) => l.includes("sat-b"))).toBe(true);
   expect(measured.labels.some((l: string) => l.includes("sat-c"))).toBe(true);
-  // The samples from before the add are the history the crossing must keep:
-  // the run streams one every 5 s of simulated time from t = 0.
-  expect(measured.before).toBeGreaterThan(3);
+  // The pre-add samples have to reach back to the start of the run, not just
+  // cover the moment before the add: a handful would also be produced by
+  // whatever had not been drained yet, which says nothing about kept history.
+  // The run streams one sample every 5 s of simulated time from t = 0.
+  expect(measured.earliest).toBeLessThan(60);
+  expect(measured.before).toBeGreaterThan(measured.addTime / 60);
 });
