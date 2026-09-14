@@ -58,6 +58,10 @@ export function useSourceRuntime() {
   const chartDirtyRef = useRef(false);
 
   const [simInfo, setSimInfo] = useState<SimInfo | null>(null);
+  // The dispatcher merges an added satellite into the current snapshot, so it
+  // needs that snapshot. A ref rather than the state value: two announcements
+  // can arrive before React re-renders, and the second has to see the first.
+  const simInfoRef = useRef<SimInfo | null>(null);
   const [serverState, setServerState] = useState<ServerState>("unknown");
   const [terminatedSatellites, setTerminatedSatellites] = useState(() => new Set<string>());
   const [connectionState, setConnectionState] = useState<SourceConnectionState>("disconnected");
@@ -104,7 +108,7 @@ export function useSourceRuntime() {
       // Seed mutableState with current connectionState so the dispatcher
       // can preserve "loading" for file sources (instead of defaulting to "disconnected").
       const mutableState: RuntimeState = {
-        simInfo: null,
+        simInfo: simInfoRef.current,
         serverState: "unknown",
         terminatedSatellites: new Set(),
         connectionState: connectionStateRef.current,
@@ -122,9 +126,14 @@ export function useSourceRuntime() {
       // Sync React state (only for events that change it)
       switch (event.kind) {
         case "info":
+          simInfoRef.current = mutableState.simInfo;
           setSimInfo(mutableState.simInfo);
           setServerState(mutableState.serverState);
           setConnectionState(mutableState.connectionState);
+          break;
+        case "satellite-added":
+          simInfoRef.current = mutableState.simInfo;
+          setSimInfo(mutableState.simInfo);
           break;
         case "terminated":
           // Use updater to preserve previously terminated satellites
@@ -136,7 +145,10 @@ export function useSourceRuntime() {
           break;
         case "server-state":
           setServerState(mutableState.serverState);
-          if (event.state === "idle") setSimInfo(null);
+          if (event.state === "idle") {
+            simInfoRef.current = null;
+            setSimInfo(null);
+          }
           break;
         case "textures-ready":
           setTextureRevision((v) => v + 1);
@@ -165,6 +177,7 @@ export function useSourceRuntime() {
     chunkLoadStartedRef.current = false;
     chartDirtyRef.current = false;
     setChartBufferVersion((v) => v + 1);
+    simInfoRef.current = null;
     setSimInfo(null);
     setServerState("unknown");
     setTerminatedSatellites(new Set());

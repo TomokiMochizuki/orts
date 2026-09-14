@@ -119,6 +119,40 @@ function createTestState(): RuntimeState {
 }
 
 describe("createEventDispatcher", () => {
+  // Two announcements can arrive before React re-renders. The runtime hands
+  // the dispatcher the snapshot it produced last, so the second merge builds
+  // on the first rather than on what the connect message left.
+  it("keeps both of two satellite-added events in a row", () => {
+    const buffers = createTestBuffers();
+    const state = createTestState();
+    const dispatch = createEventDispatcher(buffers, state, "ws-0");
+    dispatch("ws-0", { kind: "info", info: makeSimInfo() });
+
+    for (const [id, model] of [
+      ["sat2", "panel_srp"],
+      ["sat3", "panel_drag"],
+    ] as const) {
+      dispatch("ws-0", {
+        kind: "satellite-added",
+        satellite: {
+          id,
+          name: id,
+          altitude: 700,
+          period: 5900,
+          perturbations: [model],
+          shape: null,
+        },
+        t: 10,
+      });
+    }
+
+    expect(state.simInfo?.satellites.map((s) => s.id)).toEqual(["sat1", "sat2", "sat3"]);
+    expect(state.simInfo?.satellites.flatMap((s) => s.perturbations)).toEqual([
+      "panel_srp",
+      "panel_drag",
+    ]);
+  });
+
   it("info event sets simInfo and serverState", () => {
     const buffers = createTestBuffers();
     const state = createTestState();

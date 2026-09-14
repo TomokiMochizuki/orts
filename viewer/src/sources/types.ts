@@ -31,6 +31,14 @@ export type SourceEvent =
       points: OrbitPoint[];
     }
   | { kind: "terminated"; entityPath: string; t: number; reason: string }
+  /**
+   * One satellite added to a running simulation.
+   *
+   * `info` is the whole snapshot; this is the event that changes it. A live
+   * source is the only one that can produce it — a file holds whatever it
+   * recorded — as `server-state` and `textures-ready` already are.
+   */
+  | { kind: "satellite-added"; satellite: SatelliteInfo; t: number }
   | { kind: "server-state"; state: string }
   | { kind: "error"; message: string }
   | { kind: "textures-ready"; body: string }
