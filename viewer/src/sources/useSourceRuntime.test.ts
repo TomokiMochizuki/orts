@@ -44,6 +44,10 @@ class IngestBufferStub implements IngestBufferLike<OrbitPoint> {
     }
   }
 
+  get rebuildData(): OrbitPoint[] | null {
+    return this._rebuildData;
+  }
+
   get latestT(): number {
     return this._latestT;
   }
@@ -151,6 +155,36 @@ describe("createEventDispatcher", () => {
       "panel_srp",
       "panel_drag",
     ]);
+  });
+
+  // Which chart store is used follows the satellite count, so the first add
+  // moves a session from the single-satellite store to the multi-satellite
+  // one. That store starts empty and the samples were already drained out of
+  // these buffers, so the satellite that was there would lose its history.
+  it("rebuilds from the trails when one satellite becomes a fleet", () => {
+    const buffers = createTestBuffers();
+    const state = createTestState();
+    const dispatch = createEventDispatcher(buffers, state, "ws-0");
+    dispatch("ws-0", { kind: "info", info: makeSimInfo() });
+    for (const t of [0, 10, 20]) {
+      dispatch("ws-0", { kind: "state", point: makePoint(t, "sat1") });
+    }
+
+    dispatch("ws-0", {
+      kind: "satellite-added",
+      satellite: {
+        id: "sat2",
+        name: "sat2",
+        altitude: 700,
+        period: 5900,
+        perturbations: ["drag"],
+        shape: null,
+      },
+      t: 20,
+    });
+
+    const existing = buffers.ingestBuffers.get("sat1") as unknown as IngestBufferStub;
+    expect(existing.rebuildData?.map((p) => p.t)).toEqual([0, 10, 20]);
   });
 
   it("info event sets simInfo and serverState", () => {
