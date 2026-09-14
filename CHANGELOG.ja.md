@@ -509,7 +509,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   その component を持たない衛星は欄を空にする (ステップで値が欠けたときに既にそうしていた
   のと同じ扱い)。列名は recording の component registry から取る。log と `.rrd` の
   読み込みのどちらも registry を埋める。([#465](https://github.com/sksat/orts/pull/465))
-- `--tle <path>` と `orbit.tle` が、複数の要素セットを含むファイルを拒否するようになった。
+- `--tle <path>` と `orbit.tle` が、2 衛星以上を含むファイルを拒否するようになった。
   複数衛星のカタログは先頭の 1 衛星だけを伝播し、残りについて何も言わなかった。今はファイルの
   行数を示して停止する。カタログを分割し、1 回の実行につき 1 衛星を渡すこと。([#462](https://github.com/sksat/orts/pull/462))
 - controlled loop が、積分 step より短い燃焼も伝播に入れるようになった。
@@ -758,13 +758,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   落としていた mantissa の半分を回復した。非退化な軌道の値は変わらない。([#359](https://github.com/sksat/orts/pull/359))
 
 #### Fixed
-- `tle::parse` が、返す 1 つの要素セットより多くを含む入力を拒否するようになった
+- `tle::parse` が、1 衛星ぶんより多くの行を含む入力を拒否するようになった
   (新しい `TleParseError::TrailingLines`)。従来は先頭のレコードを読んで残りを黙って捨てて
-  いた。各レコードの 2 行はそれぞれ正しい checksum を持つので、後続の処理では気づけない —
-  2 衛星のカタログが先頭の 1 衛星として通っていた。空行と末尾の空白は、従来どおり数える前に
-  除かれる。([#462](https://github.com/sksat/orts/pull/462))
+  いた。checksum は行ごとの mod-10 なので読んだ 2 行だけで成立し、catalog number の一致検査も
+  その 2 行の間だけで比べるため、3 行目以降を見る検査が無かった — 2 衛星のカタログが先頭の
+  1 衛星として通っていた。空行と末尾の空白は、従来どおり数える前に除かれる。([#462](https://github.com/sksat/orts/pull/462))
 - OMM の 3 形式 (JSON / KVN / XML) すべてで `BSTAR` を必須にした。従来は欠落を `0.0` と
-  読んでいたので、この field が無い要素セットは抗力のない衛星として伝播し、成功として
+  読んでいたので、この field が無い OMM は抗力のない衛星として伝播し、成功として
   報告されていた。他の要素はすべて既に必須である。`0.0` が明示的に書かれている場合は
   従来どおり受理する (高い軌道では正当な値のため)。parser は `MEAN_ELEMENT_THEORY` が
   SGP4 以外を拒否するので、これは SGP4 自身が読む抗力項である。([#462](https://github.com/sksat/orts/pull/462))

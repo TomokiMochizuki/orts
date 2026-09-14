@@ -892,9 +892,9 @@ section is subdivided by package.
 #### Fixed
 - `tle::parse` refuses input carrying more than the one element set it returns,
   as the new `TleParseError::TrailingLines`. It read the first record and
-  dropped the rest without saying so, and since every record's two lines carry
-  their own valid checksums, nothing downstream could notice — a two-satellite
-  catalog parsed as its first satellite. Blank lines and trailing whitespace are
+  dropped the rest without saying so, and no check looked past the second line:
+  the checksum is a per-line mod-10, and the catalog-number check compares only
+  the two lines it read — a two-satellite catalog parsed as its first satellite. Blank lines and trailing whitespace are
   dropped before counting, as they always were. ([#462](https://github.com/sksat/orts/pull/462))
 - The OMM parsers require `BSTAR` in all three serializations (JSON, KVN, XML).
   A missing drag term read as `0.0`, so an element set with the field absent
