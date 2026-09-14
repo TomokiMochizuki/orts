@@ -1,7 +1,7 @@
 use arika::body::KnownBody;
 use arika::earth::ellipsoid::{WGS84_A, WGS84_B};
 use arika::earth::geodetic::Geodetic;
-use arika::earth::{OMEGA as OMEGA_EARTH, R as R_EARTH};
+use arika::earth::{ERA_RATE as OMEGA_EARTH, R as R_EARTH};
 use arika::epoch::Epoch;
 use arika::frame::{self, Vec3};
 use nalgebra::Vector3;
@@ -419,9 +419,9 @@ mod tests {
         assert_close(
             drag.acceleration(&snapshot_state(), Some(&snapshot_epoch())),
             vector![
-                3.8628351064926684e-10,
-                -3.1107100564692614e-10,
-                -1.3309393817407415e-10
+                3.8628351377163046e-10,
+                -3.1107100931795644e-10,
+                -1.3309393878723778e-10
             ],
             "SimpleEci drag acceleration",
         );
@@ -465,9 +465,9 @@ mod tests {
         assert_close(
             drag.acceleration(&state, Some(&snapshot_epoch())),
             vector![
-                3.860448550404581e-10,
-                -3.1095898931087664e-10,
-                -1.329816156620057e-10
+                3.8604485815740957e-10,
+                -3.1095899296891663e-10,
+                -1.3298161627656243e-10
             ],
             "Gcrs drag acceleration",
         );

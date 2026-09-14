@@ -338,10 +338,11 @@ impl Ut1Epoch {
 /// Earth Rotation Angle (ERA) formula, shared by `Ut1Epoch::era` and the
 /// legacy `Epoch<Utc>::gmst` method.
 ///
-/// Note: the current arika source value `1.002_737_811_911_354_6` differs
-/// from the canonical SOFA value `1.00273781191135448` by roughly 1 f64 ULP
-/// (~1e-16). Phase 1A keeps the legacy constant for bit-level invariance with
-/// pre-refactor tests. The canonical value will be adopted in a later phase.
+/// The coefficient below is the canonical SOFA value: `1.00273781191135448`
+/// and the shorter `1.002_737_811_911_354_6` written here round to the same
+/// f64 (`0x3ff00b36cdc9f32b`), so there is nothing to adopt later.
+/// [`earth::ERA_RATE`](crate::earth::ERA_RATE) is this coefficient's
+/// derivative form.
 pub(super) fn era_formula(ut1_jd: f64) -> f64 {
     let du = ut1_jd - J2000_JD;
     let era = TAU * (0.7790572732640 + 1.002_737_811_911_354_6 * du);

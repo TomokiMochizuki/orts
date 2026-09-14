@@ -156,6 +156,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   1 つ足すのは `with_occulter`。古いフィールドを名前で書いた struct literal は
   コンパイルできなくなる。([#469](https://github.com/sksat/orts/pull/469))
 #### Fixed
+- `AtmosphericDrag` の既定の `omega_body` と `perturbations::OMEGA_EARTH` の re-export が
+  `arika::earth::ERA_RATE` になった。共回転する大気は frame chain と一緒に回るので、その角速度は
+  測地系の nominal 定数ではなく chain が回る速度である。**drag の加速度が相対 9.46e-9 変わる** —
+  snapshot の state で実測した値で、テストの許容は相対 1e-12 なので許容ではなく期待値を
+  更新した。([#478](https://github.com/sksat/orts/pull/478))
 - 積分 step より短い燃焼も伝播に入るようになった。`IndependentGroup` と `CoupledGroup` は
   現在時刻から目標時刻まで積分器を 1 回走らせていたので、隣り合う評価点の最大間隔より狭い
   `BurnWindow` が評価点の間に落ちていた。RK4 で `dt = 1` のとき `[0.1, 0.2)` は推進剤
@@ -801,6 +806,17 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 - **BREAKING**: `EopParseError` と `EopLookupError` が `#[non_exhaustive]` になった。網羅的な
   `match` には wildcard arm が必要である。今回どちらも variant が増え、未着手の EOP の作業でも
   さらに増える。([#463](https://github.com/sksat/orts/pull/463))
+- `earth::OMEGA` を WGS-84 の nominal mean angular velocity `7.292115e-5` rad/s に訂正し、
+  Earth Rotation Angle が進む速度 `2π × 1.00273781191135448 / 86400` を
+  `earth::ERA_RATE` として追加した。**`OMEGA` の値が変わる**: 従来の `7.2921159e-5` は、doc が
+  引用していた IERS 2010 の値でも、IAU 2006 chain が回る速度でもなく、歳差する春分点に対する
+  自転速度だった。`EarthFixedTransform` は速度変換に `ERA_RATE` を使う — 適用する回転の
+  微分がそれだからである。実測すると両者は `7.53e-12` rad/s 違い、state transform の snapshot の
+  自転軸垂直半径 6403 km では 0.0482 mm/s に相当する。`OMEGA` は `MU` や `R` と並ぶ測地系の
+  定数として残る。([#478](https://github.com/sksat/orts/pull/478))
+- `era_formula` のコメントが、arika の係数は canonical な SOFA 値 `1.00273781191135448` と
+  約 1 ULP 違い、canonical 値は後のフェーズで採用すると書いていた。どちらの書き方も同じ f64
+  (`0x3ff00b36cdc9f32b`) に丸まるので、採用すべきものは無かった。([#478](https://github.com/sksat/orts/pull/478))
 - `KeplerianElements::from_state_vector` が離心率のある赤道軌道の近地点方向を
   失っていた。RAAN と argument of periapsis の両方を 0 にしつつ真近点角を離心率
   ベクトルから測っていたため、赤道面内の近地点経度がどの要素にも保存されなかった。

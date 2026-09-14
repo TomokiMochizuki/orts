@@ -4,7 +4,10 @@ mod srp;
 mod third_body;
 mod zonal_gravity;
 
-pub use arika::earth::OMEGA as OMEGA_EARTH;
+// The co-rotating atmosphere turns with the frame chain, so the default
+// `omega_body` is the rate that chain rotates at rather than the geodetic
+// nominal constant.
+pub use arika::earth::ERA_RATE as OMEGA_EARTH;
 pub use constant_thrust::ConstantThrust;
 pub use drag::{AtmosphericDrag, DEFAULT_BALLISTIC_COEFF};
 pub use srp::{

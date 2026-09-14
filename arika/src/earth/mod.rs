@@ -58,8 +58,28 @@ pub const J3: f64 = -2.5356e-6;
 /// Earth J4 zonal harmonic coefficient (WGS-84 / EGM96).
 pub const J4: f64 = -1.6199e-6;
 
-/// Earth rotation rate [rad/s] (IERS 2010).
-pub const OMEGA: f64 = 7.2921159e-5;
+/// Nominal mean Earth angular velocity [rad/s] (WGS-84 defining parameter,
+/// listed as the GRS80 nominal value in IERS Conventions 2010 Table 1.2).
+///
+/// A geodetic constant, alongside [`MU`] and [`R`]. For the time derivative of
+/// the IAU 2006 rotation chain — the angular velocity a frame transform
+/// transports velocities with — use [`ERA_RATE`], which is the rate the chain's
+/// own Earth Rotation Angle advances at.
+pub const OMEGA: f64 = 7.292_115e-5;
+
+/// Rate the Earth Rotation Angle advances at [rad per UT1 second].
+///
+/// The derivative of the ERA expression (IAU 2000 Resolution B1.8; IERS
+/// Conventions 2010 Eq. 5.14): `2π × 1.00273781191135448 / 86400`. The
+/// coefficient below is that value as an f64 — the two spellings round to the
+/// same bits, and this is the one that survives a round trip. Carries no LOD
+/// correction, so it is the nominal rate of the chain rather than of the Earth
+/// on a given day.
+///
+/// This is the rate the IAU 2006 chain rotates by, so transporting velocities
+/// with [`OMEGA`] instead left the rotation and its derivative disagreeing by
+/// `1.47e-12 rad/s` — 0.0103 mm/s at 7000 km.
+pub const ERA_RATE: f64 = core::f64::consts::TAU * 1.002_737_811_911_354_6 / 86_400.0;
 
 #[cfg(test)]
 mod tests {

@@ -195,6 +195,13 @@ section is subdivided by package.
   ([#469](https://github.com/sksat/orts/pull/469))
 
 #### Fixed
+- `AtmosphericDrag`'s default `omega_body` and the `perturbations::OMEGA_EARTH`
+  re-export are `arika::earth::ERA_RATE`. The co-rotating atmosphere turns with
+  the frame chain, so its angular velocity is the rate that chain rotates at
+  rather than the geodetic nominal constant. **Drag accelerations change** by
+  9.46e-9 relative — measured on the snapshot states, where the tolerance is
+  1e-12 relative, so the expected values were updated rather than the
+  tolerance. ([#478](https://github.com/sksat/orts/pull/478))
 - A scheduled burn is flown even when it is shorter than an integration step.
   `IndependentGroup` and `CoupledGroup` ran the integrator from the current time
   straight to the target, so a `BurnWindow` narrower than the largest gap
@@ -943,6 +950,20 @@ section is subdivided by package.
 - **BREAKING**: `EopParseError` and `EopLookupError` are `#[non_exhaustive]`, so
   an exhaustive `match` on either needs a wildcard arm. Both gained a variant
   here and the EOP work still open will add more. ([#463](https://github.com/sksat/orts/pull/463))
+- `earth::OMEGA` is the WGS-84 nominal mean angular velocity `7.292115e-5`
+  rad/s, and the new `earth::ERA_RATE` is the rate the Earth Rotation Angle
+  advances at, `2π × 1.00273781191135448 / 86400`. **`OMEGA` changes value**:
+  it held `7.2921159e-5`, which is neither the IERS 2010 figure its doc cited
+  nor the rate the IAU 2006 chain rotates at, but the rotation rate relative to
+  the precessing equinox. `EarthFixedTransform` transports velocities with
+  `ERA_RATE` now, since that is the derivative of the rotation it applies —
+  measured, the two disagreed by `7.53e-12` rad/s, which is 0.0482 mm/s at the
+  6403 km cross-axis radius of the state-transform snapshots. `OMEGA` stays as
+  the geodetic constant beside `MU` and `R`. ([#478](https://github.com/sksat/orts/pull/478))
+- The note on `era_formula` said arika's coefficient differed from the
+  canonical SOFA `1.00273781191135448` by about 1 ULP and that the canonical
+  value would be adopted later. Both spellings round to the same f64
+  (`0x3ff00b36cdc9f32b`), so there was nothing to adopt. ([#478](https://github.com/sksat/orts/pull/478))
 - `KeplerianElements::from_state_vector` lost the periapsis direction of an
   eccentric equatorial orbit: it zeroed both the RAAN and the argument of
   periapsis while still measuring the true anomaly from the eccentricity vector,
