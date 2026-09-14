@@ -134,7 +134,7 @@ interface types {
         w: f64, x: f64, y: f64, z: f64,
     }
 
-    /// ������座標系での太陽方向（単位ベクトル、satellite→Sun）。
+    /// 機体座標系での太陽方向（単位ベクトル、satellite→Sun）。
     record sun-direction-body {
         x: f64, y: f64, z: f64,
     }
@@ -153,7 +153,7 @@ interface types {
     variant sun-sensor-output {
         /// Fine sun sensor: 太陽方向 + 照度。
         fine(sun-fine-output),
-        /// Coarse sun sensor (CSS): cos(入射角) × 照度 ��スカラー。
+        /// Coarse sun sensor (CSS): cos(入射角) × 照度 のスカラー。
         /// TODO: coarse 実装は将来追加予定。
         coarse(f64),
     }
@@ -168,7 +168,7 @@ interface types {
         /// ジャイロスコープ。
         gyroscopes: list<angular-velocity-body>,
 
-        /// スタ��トラッカ。
+        /// スタートラッカ。
         star-trackers: list<attitude-body-to-inertial>,
 
         /// 太陽センサ。
