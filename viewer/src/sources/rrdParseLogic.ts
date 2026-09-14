@@ -4,6 +4,9 @@
  * Shared between the Worker and the main thread (RrdFileAdapter).
  */
 
+import { TORQUE_AXES, TORQUE_CHART_MODELS } from "../chartMetrics.js";
+import { type OrbitPoint, torqueComponent } from "../orbit.js";
+
 import type { RrdMetadata } from "../wasm/rrdWasmInit.js";
 
 /** Messages from main thread → Worker */
@@ -35,6 +38,8 @@ export interface RrdPointOut {
   wx?: number;
   wy?: number;
   wz?: number;
+  /** `torque_<model>_<axis>` for the models the charts know. */
+  [torqueColumn: `torque_${string}`]: number | undefined;
 }
 
 /** One decoded row as rrd-wasm hands it over. */
@@ -50,6 +55,11 @@ export interface RrdRowIn {
   /** Four components or nothing — see {@link rowToPoint}. */
   quaternion?: readonly [number, number, number, number] | null;
   angular_velocity?: readonly [number, number, number] | null;
+  /** One triple per model, or nothing — the decoder reports a torque only
+   * where all three axes are present. */
+  torque_gravity_gradient?: readonly [number, number, number] | null;
+  torque_panel_srp?: readonly [number, number, number] | null;
+  torque_panel_drag?: readonly [number, number, number] | null;
 }
 
 /**
@@ -87,5 +97,47 @@ export function rowToPoint(row: RrdRowIn): RrdPointOut {
     point.wy = row.angular_velocity[1];
     point.wz = row.angular_velocity[2];
   }
+
+  // Whole or not at all, as the attitude is: the decoder leaves a model's
+  // torque out entirely unless all three axes were logged.
+  for (const model of TORQUE_CHART_MODELS) {
+    const triple = row[`torque_${model}` as keyof RrdRowIn] as
+      | readonly [number, number, number]
+      | null
+      | undefined;
+    if (!triple) continue;
+    TORQUE_AXES.forEach((axis, i) => {
+      point[`torque_${model}_${axis}` as `torque_${string}`] = triple[i];
+    });
+  }
   return point;
+}
+
+/** Models whose whole torque triple appears in these points, per entity.
+ *
+ * A recording's columns are the union over its satellites, so the presence of
+ * a column says nothing about a given satellite: what counts is a triple
+ * actually decoded for it. A model reporting `[0, 0, 0]` is a model that was
+ * there, and is counted.
+ */
+export function torqueModelsOf(
+  points: readonly OrbitPoint[],
+  into: Map<string, Set<string>> = new Map(),
+): Map<string, Set<string>> {
+  for (const point of points) {
+    const entity = point.entityPath ?? "default";
+    for (const model of TORQUE_CHART_MODELS) {
+      const complete = TORQUE_AXES.every(
+        (axis) => torqueComponent(point, `torque_${model}_${axis}`) !== undefined,
+      );
+      if (!complete) continue;
+      let models = into.get(entity);
+      if (!models) {
+        models = new Set();
+        into.set(entity, models);
+      }
+      models.add(model);
+    }
+  }
+  return into;
 }

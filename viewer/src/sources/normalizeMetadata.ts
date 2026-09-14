@@ -70,6 +70,8 @@ export function rrdMetadataToSimInfo(
   dt: number,
   entityPaths: string[],
   centralBody: CentralBody,
+  /** Models whose torque was decoded, per entity — see `torqueModelsOf`. */
+  torqueModels?: ReadonlyMap<string, ReadonlySet<string>>,
 ): SimInfo {
   const satellites = entityPaths.map((path) => {
     // Extract name from entity path (last segment after /sat/)
@@ -80,7 +82,9 @@ export function rrdMetadataToSimInfo(
       name,
       altitude: metadata.altitude ?? 0,
       period: metadata.period ?? 0,
-      perturbations: [] as string[],
+      // What the charts key on. A recording that carries a model's torque
+      // makes that model's chart appear, as a live run's `perturbations` does.
+      perturbations: [...(torqueModels?.get(path) ?? [])],
       shape: null,
     };
   });

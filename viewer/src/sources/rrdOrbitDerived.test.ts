@@ -157,3 +157,33 @@ describe("orbitPointToChartRow torque columns", () => {
     }
   });
 });
+
+describe("toOrbitPoints torque columns", () => {
+  // The point is rebuilt here from the decoded row plus the derived elements,
+  // so a column left out of that rebuild never reaches a chart however well
+  // the decoder read it.
+  it("keeps the decoded torque columns through the rebuild", () => {
+    const decoded = [
+      {
+        t: 10,
+        x: 6778,
+        y: 0,
+        z: 0,
+        vx: 0,
+        vy: 7.669,
+        vz: 0,
+        entityPath: "/world/sat/sat-a",
+        torque_gravity_gradient_x: 1e-5,
+        torque_gravity_gradient_y: -2e-5,
+        torque_gravity_gradient_z: 3e-5,
+      },
+    ];
+    const derived = new Float64Array(ORBIT_DERIVED_STRIDE).fill(1);
+
+    const [point] = toOrbitPoints(decoded, derived);
+
+    expect(point.torque_gravity_gradient_x).toBe(1e-5);
+    expect(point.torque_gravity_gradient_z).toBe(3e-5);
+    expect(point.torque_panel_srp_x).toBeUndefined();
+  });
+});

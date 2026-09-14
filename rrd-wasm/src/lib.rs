@@ -38,6 +38,11 @@ pub struct RrdRow {
     pub entity_path: Option<String>,
     pub quaternion: Option<[f64; 4]>,
     pub angular_velocity: Option<[f64; 3]>,
+    /// Body-frame disturbance torque per model [N·m], for the models the
+    /// viewer charts. A model the recording does not carry stays `None`.
+    pub torque_gravity_gradient: Option<[f64; 3]>,
+    pub torque_panel_srp: Option<[f64; 3]>,
+    pub torque_panel_drag: Option<[f64; 3]>,
 }
 
 /// Full decoded RRD data.
@@ -428,6 +433,19 @@ pub fn decode_rrd(reader: impl Read) -> Result<ParsedRrd, Box<dyn std::error::Er
         let vel_cols = (column("vx"), column("vy"), column("vz"));
         let quat_cols = (column("qw"), column("qx"), column("qy"), column("qz"));
         let omega_cols = (column("wx"), column("wy"), column("wz"));
+        // `orts run` names a model's torque fields
+        // `<model>.torque_body_{x,y,z}_Nm`, and a field is part of the entity
+        // path, so these are columns like any other.
+        let torque_cols = |model: &str| {
+            (
+                column(&format!("{model}.torque_body_x_Nm")),
+                column(&format!("{model}.torque_body_y_Nm")),
+                column(&format!("{model}.torque_body_z_Nm")),
+            )
+        };
+        let gg_cols = torque_cols("gravity_gradient");
+        let srp_cols = torque_cols("panel_srp");
+        let drag_cols = torque_cols("panel_drag");
 
         // A recording with no velocity column at all is position-only; one that
         // has velocity columns must supply all three at a time for the row to be
@@ -456,6 +474,15 @@ pub fn decode_rrd(reader: impl Read) -> Result<ParsedRrd, Box<dyn std::error::Er
             omega_cols.0,
             omega_cols.1,
             omega_cols.2,
+            gg_cols.0,
+            gg_cols.1,
+            gg_cols.2,
+            srp_cols.0,
+            srp_cols.1,
+            srp_cols.2,
+            drag_cols.0,
+            drag_cols.1,
+            drag_cols.2,
         ]
         .into_iter()
         .flatten()
@@ -519,6 +546,9 @@ pub fn decode_rrd(reader: impl Read) -> Result<ParsedRrd, Box<dyn std::error::Er
                 ])
             })();
             let angular_velocity = triple(omega_cols);
+            let torque_gravity_gradient = triple(gg_cols);
+            let torque_panel_srp = triple(srp_cols);
+            let torque_panel_drag = triple(drag_cols);
 
             rows.push(RrdRow {
                 t: key.t_secs(),
@@ -531,6 +561,9 @@ pub fn decode_rrd(reader: impl Read) -> Result<ParsedRrd, Box<dyn std::error::Er
                 entity_path: Some(base.clone()),
                 quaternion,
                 angular_velocity,
+                torque_gravity_gradient,
+                torque_panel_srp,
+                torque_panel_drag,
             });
         }
     }
@@ -841,6 +874,56 @@ mod tests {
             data.rows
         );
         assert_eq!((data.rows[0].t, data.rows[0].vz), (0.0, 105.0));
+    }
+
+    /// The torque a recording carries per model reaches the decoded row.
+    ///
+    /// `orts run` names these fields `<model>.torque_body_{x,y,z}_Nm`, one set
+    /// per model, and a field is part of the entity path.
+    #[test]
+    fn each_model_torque_reaches_the_row() {
+        let mut torque_step = state(200.0);
+        torque_step.extend([
+            ("gravity_gradient.torque_body_x_Nm", 1e-5),
+            ("gravity_gradient.torque_body_y_Nm", -2e-5),
+            ("gravity_gradient.torque_body_z_Nm", 3e-5),
+            ("panel_srp.torque_body_x_Nm", 4e-7),
+            ("panel_srp.torque_body_y_Nm", 5e-7),
+            ("panel_srp.torque_body_z_Nm", 6e-7),
+            ("panel_drag.torque_body_x_Nm", 0.0),
+            ("panel_drag.torque_body_y_Nm", 0.0),
+            ("panel_drag.torque_body_z_Nm", 0.0),
+        ]);
+        let data = decode_samples(&[(0.0, state(100.0)), (10.0, torque_step)]);
+
+        assert_eq!(data.rows.len(), 2);
+        assert_eq!(
+            data.rows[0].torque_gravity_gradient, None,
+            "t=0 logged no torque"
+        );
+        assert_eq!(
+            data.rows[1].torque_gravity_gradient,
+            Some([1e-5, -2e-5, 3e-5])
+        );
+        assert_eq!(data.rows[1].torque_panel_srp, Some([4e-7, 5e-7, 6e-7]));
+        // A model that reported zero is a model that was there, which is a
+        // different reading from a model the recording has no column for.
+        assert_eq!(data.rows[1].torque_panel_drag, Some([0.0, 0.0, 0.0]));
+    }
+
+    /// A torque missing one axis is no torque: reporting the two that are
+    /// there would put a made-up component on the third.
+    #[test]
+    fn torque_missing_an_axis_is_not_reported() {
+        let mut partial = state(200.0);
+        partial.extend([
+            ("panel_srp.torque_body_x_Nm", 4e-7),
+            ("panel_srp.torque_body_y_Nm", 5e-7),
+        ]);
+        let data = decode_samples(&[(0.0, state(100.0)), (10.0, partial)]);
+
+        assert_eq!(data.rows.len(), 2);
+        assert_eq!(data.rows[1].torque_panel_srp, None);
     }
 
     /// Attitude logged at only some steps must attach to those steps.
