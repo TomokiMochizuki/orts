@@ -533,10 +533,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   ぶんで終わっていた。周期 5500 s と 7000 s の 2 機なら、記述順だけで run の長さが 5500 s か
   7000 s に変わる。fleet は時計を共有するので、「一周」は最長周期にした。全機に少なくとも 1 周期ぶんの
   時間を与える最短の horizon である。orbit-only と spacecraft は従来どおり衛星ごとに自分の周期で
-  終わる。正で有限でない周期は覆うべき軌道を持たないので飛ばし、使える周期が残らなければ従来の
-  3600 s になる。これは受理される config から到達しうる: 円軌道の検証は高度が有限で
-  `radius + altitude > 0` であることだけを見るが、周期 `2 pi sqrt(r0^3 / mu)` は `r0 = 1e103` で
-  inf、`r0 = 1e-200` で 0 になる。
+  終わる。正で有限でない周期は飛ばし、使える周期が残らなければ従来の 3600 s になる。どちらも
+  その衛星を覆う horizon ではなく、run が使えない数値に対する guard である。受理される config から
+  到達する: 円軌道の検証は高度が有限で `radius + altitude > 0` であることだけを見るが、周期
+  `2 pi sqrt(r0^3 / mu)` は `r0 = 1e103` で `r0^3` が overflow して inf になる。導出した時点で
+  こうした周期を拒否して全モードを揃える件は #492。
   ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` が、controller が `output_interval` より遅いと `output_interval` を
   無視していた。span の終端が controller tick か `duration` だけだったので、controller period 1 s

@@ -652,11 +652,12 @@ section is subdivided by package.
   written in. The fleet shares one clock, so "one orbit" is now the longest
   period in it: the shortest horizon that gives every satellite at least one
   initial orbital period. The orbit-only and spacecraft paths still end each
-  satellite at its own period. A period that is not a positive finite number
-  carries no orbit to cover and is skipped, leaving the historical 3600 s —
-  reachable from an accepted config, since a circular orbit is validated on a
-  finite altitude and `radius + altitude > 0` while `2 pi sqrt(r0^3 / mu)` is
-  infinite for `r0 = 1e103` and zero for `r0 = 1e-200`.
+  satellite at its own period. A period that is not a positive finite number is
+  skipped, leaving the historical 3600 s; neither covers such a satellite, so it
+  is a guard rather than a horizon. An accepted config reaches it: a circular
+  orbit is validated on a finite altitude and `radius + altitude > 0`, while
+  `2 pi sqrt(r0^3 / mu)` overflows to infinity at `r0 = 1e103`. Refusing such a
+  period where it is derived, so every mode agrees, is #492.
   ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` ignored `output_interval` whenever the controller was
   slower than it: a span ended only at a controller tick or at `duration`, so

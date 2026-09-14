@@ -1161,14 +1161,17 @@ fn monitors_want(span_end_t: f64, fleet_event_t: f64, duration: f64, stopped_any
 /// recording — until the longest one is done, which is what a shared horizon
 /// means. `--duration` is there for a run that should stop earlier.
 ///
-/// A period that is not a positive finite number carries no orbit to cover and
-/// is skipped; with nothing usable left the answer is the historical 3600 s.
+/// A period that is not a positive finite number is skipped, and with nothing
+/// usable left the answer is the historical 3600 s. Neither is a horizon that
+/// covers such a satellite — it is a guard against a number no run can use.
 ///
-/// That is reachable from a config the CLI accepts. A circular orbit is
-/// validated on a finite altitude and `radius + altitude > 0`, while the period
-/// is `2 pi sqrt(r0^3 / mu)`: measured in f64, `r0 = 1e103` makes `r0^3`
-/// infinite and the period with it, and `r0 = 1e-200` makes both zero. Such a
-/// run covers an hour rather than an orbit nobody can integrate.
+/// It is reachable from a config the CLI accepts: a circular orbit is validated
+/// on a finite altitude and `radius + altitude > 0`, while the period is
+/// `2 pi sqrt(r0^3 / mu)`, and `r0 = 1e103` overflows `r0^3` to infinity.
+/// (Underflow is not reachable that way: the smallest `r0` an altitude can
+/// reach is one ulp of the body's radius, 9.09e-13 km for Earth, whose period
+/// is 8.63e-21 s.) Validating the derived period so every mode refuses it
+/// belongs with the other paths that take it as an end time — see #492.
 fn fleet_duration(explicit: Option<f64>, periods: impl Iterator<Item = f64>) -> f64 {
     if let Some(duration) = explicit {
         return duration;
