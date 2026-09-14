@@ -130,11 +130,11 @@ export function parseHeaderLine(line: string): CSVColumns | null {
  * `Number` reads none of these spellings: `Number("inf")` is NaN, which would
  * otherwise be indistinguishable from a malformed cell.
  */
-const NON_FINITE: Record<string, number> = {
-  NaN: Number.NaN,
-  inf: Number.POSITIVE_INFINITY,
-  "-inf": Number.NEGATIVE_INFINITY,
-};
+const NON_FINITE = new Map<string, number>([
+  ["NaN", Number.NaN],
+  ["inf", Number.POSITIVE_INFINITY],
+  ["-inf", Number.NEGATIVE_INFINITY],
+]);
 
 /** One cell as a number, or `undefined` where the file left it empty.
  *
@@ -146,7 +146,10 @@ function cell(cells: string[], index: number | undefined): number | undefined {
   if (index === undefined) return undefined;
   const raw = cells[index];
   if (raw === undefined || raw === "") return undefined;
-  if (raw in NON_FINITE) return NON_FINITE[raw];
+  // A `Map`, not an object: `"toString" in {...}` is true and yields a
+  // function, which would leave a cell spelled `toString` passing as a number.
+  const nonFinite = NON_FINITE.get(raw);
+  if (nonFinite !== undefined) return nonFinite;
   const value = Number(raw);
   return Number.isNaN(value) ? undefined : value;
 }

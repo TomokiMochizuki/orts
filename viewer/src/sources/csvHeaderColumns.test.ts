@@ -150,6 +150,15 @@ describe("parseDataLineWithColumns", () => {
     expect(point?.e).toBeUndefined();
   });
 
+  // `"toString" in {...}` is true, and an object lookup would hand back a
+  // function where a number is declared.
+  it("does not read an inherited property name as a number", () => {
+    const cells = row("sat-a", 10, {}).split(",");
+    cells[columns.fields.get("t") as number] = "toString";
+
+    expect(parseDataLineWithColumns(cells.join(","), columns)).toBeNull();
+  });
+
   it("refuses a row without the state vector", () => {
     const cells = row("sat-a", 10, {}).split(",");
     cells[2] = ""; // x
