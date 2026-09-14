@@ -1394,11 +1394,15 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         // `output_interval` を変えるだけで AOS/LOS の補間や短い pass の検出が
         // 変わってしまう。
         //
+        // 衛星が停止した区間でも feed する。停止は monitor に渡すべき出来事で、
+        // しかも全機終了ならこのあとループを抜けるので、渡さないと開いていた
+        // contact window が 1 つ前の sample で閉じてしまう。
+        //
         // 全機終了の判定より前に置く: そうしないと、最後の衛星が終了した区間
         // では終了状態が monitor に渡らず、同じ衛星の contact window の終端が
         // 「ほかに生存機がいるか」で変わってしまう。
-        let at_fleet_event = next_t >= fleet_event_t || next_t >= duration;
-        if let Some(monitors) = visibility.as_mut().filter(|_| at_fleet_event) {
+        let monitor_event = next_t >= fleet_event_t || next_t >= duration || !stopped.is_empty();
+        if let Some(monitors) = visibility.as_mut().filter(|_| monitor_event) {
             feed_visibility(
                 monitors,
                 &mut vis_last_t,
