@@ -24,6 +24,7 @@ use orts::spacecraft::{
     ThrusterAssemblyCore, ThrusterSpec,
 };
 use tobari::magnetic::igrf::Igrf;
+use utsuroi::AdvanceOutcome;
 use utsuroi::{Dop853, DormandPrince, IntegrationError, Integrator, Rk4, Segments};
 
 use crate::config::{ControllerConfig, MtqConfig, ReactionWheelConfig, SensorChoice};
@@ -50,10 +51,35 @@ pub struct ControlledBuildContext<'a> {
     pub plugin_backend: ResolvedPluginBackend,
 }
 
+/// Why a satellite stopped being propagated, and the time of the state it
+/// stopped at.
+///
+/// `t` is where the condition was detected, which is one of two places: the
+/// start of the span, when the state handed to [`advance_controlled`] already
+/// satisfies it, or the end of the step that first landed past the boundary
+/// (the surface, or the top of the atmosphere where the body has one).
+/// Neither is the crossing itself — the same meaning the event checker has in
+/// [`orts::group::IndependentGroup`].
+#[derive(Debug, Clone)]
+pub struct Termination {
+    pub t: f64,
+    pub reason: String,
+}
+
 /// 制御付き衛星の状態。
 pub struct ControlledSatellite {
     pub dynamics: SpacecraftDynamics<Box<dyn GravityField>>,
     pub state: AugmentedState<SpacecraftState>,
+    /// Sim time `state` belongs to [s].
+    ///
+    /// Starts at the time the satellite entered the simulation, and moves with
+    /// `state`: to a span's end when the span completes, or to where the
+    /// termination check stopped it. A terminated satellite keeps the time it
+    /// stopped at.
+    pub state_t: f64,
+    /// Set when the termination check broke on this satellite. It is then not
+    /// propagated, ticked, or sampled again.
+    pub terminated: Option<Termination>,
     pub controller: Box<dyn PluginController>,
     pub sensors: SensorBundle,
     pub actuators: ActuatorBundle,
@@ -110,6 +136,8 @@ impl ControlledSatellite {
         Self {
             dynamics,
             state,
+            state_t: 0.0,
+            terminated: None,
             controller,
             sensors: SensorBundle::default(),
             actuators: ActuatorBundle::new(),
@@ -310,6 +338,8 @@ pub fn build_controlled_satellite(
     Ok(ControlledSatellite {
         dynamics,
         state,
+        state_t: start_t,
+        terminated: None,
         controller,
         sensors,
         actuators,
@@ -413,6 +443,7 @@ fn apply_held_commands(sat: &mut ControlledSatellite) -> Result<(), String> {
 /// — ran every slower controller at that rate.
 pub fn next_fleet_event_t(sats: &[ControlledSatellite], horizon: f64) -> f64 {
     sats.iter()
+        .filter(|sat| sat.terminated.is_none())
         .map(|sat| sat.next_tick_t())
         .fold(f64::INFINITY, f64::min)
         .min(horizon)
@@ -437,17 +468,38 @@ pub fn advance_controlled(
     from: f64,
     to: f64,
     params: &SimParams,
-) -> Result<(), String> {
+) -> Result<Option<Termination>, String> {
+    // Already terminated: nothing to propagate, and nothing new to report.
+    // The caller distinguishes "stopped now" from "stopped earlier" by this.
+    if sat.terminated.is_some() {
+        return Ok(None);
+    }
+
     let integrator = params.integrator_config();
     let epoch = params.epoch.as_ref();
+    let check = crate::sim::core::body_event_checker::<AugmentedState<SpacecraftState>>(params);
+
+    // A satellite can be added below the surface, and the steppers check their
+    // own initial state — but only of the span they are given, so a span that
+    // is never integrated (`to <= from`) would slip past.
+    if let ControlFlow::Break(reason) = check(from, &sat.state) {
+        let term = Termination { t: from, reason };
+        sat.terminated = Some(term.clone());
+        return Ok(Some(term));
+    }
+
     let mut t = from;
     while sat.tick_due_at(to) {
         let tick_t = sat.next_tick_t();
-        propagate_controlled(sat, t, tick_t, &integrator)?;
+        // The controller is not called at an instant the satellite did not
+        // reach: termination wins over a tick at the same time.
+        if let Some(term) = propagate_controlled(sat, t, tick_t, &integrator, &check)? {
+            return Ok(Some(term));
+        }
         tick_controller(sat, tick_t, epoch)?;
         t = tick_t;
     }
-    propagate_controlled(sat, t, to, &integrator)
+    propagate_controlled(sat, t, to, &integrator, &check)
 }
 
 /// Integrate `[t0, t1]` under the command the actuators already hold.
@@ -468,12 +520,16 @@ pub fn advance_controlled(
 /// into the next: `advance_to` computes `h = dt.min(t_target - t)` and then
 /// stores `h * factor`, so a span boundary would shrink the step the next span
 /// starts from.
-pub fn propagate_controlled(
+pub fn propagate_controlled<E>(
     sat: &mut ControlledSatellite,
     t0: f64,
     t1: f64,
     integrator: &IntegratorConfig,
-) -> Result<(), String> {
+    event_check: &E,
+) -> Result<Option<Termination>, String>
+where
+    E: Fn(f64, &AugmentedState<SpacecraftState>) -> ControlFlow<String>,
+{
     let span = |e: IntegrationError| format!("integration failed on [{t0:.3}, {t1:.3}]: {e}");
 
     // Before the no-op guard: `t1 <= t0` is true for a `t0` of `+inf`, so an
@@ -485,7 +541,7 @@ pub fn propagate_controlled(
         return Err(span(IntegrationError::InvalidTimeSpan { t0, t_end: t1 }));
     }
     if t1 <= t0 {
-        return Ok(());
+        return Ok(None);
     }
 
     // One segment at a time, so that no switch of the right-hand side falls
@@ -508,55 +564,77 @@ pub fn propagate_controlled(
         let segment_end = segment.end();
         let bound = segment.system();
 
-        match integrator {
+        // Each arm answers the same triple, so the commit rule below is
+        // written once. `stepper` is asked for its time before `into_state`
+        // consumes it: that is where an event stopped.
+        let (outcome, reached_t, next_state) = match integrator {
             IntegratorConfig::Rk4 { dt } => {
-                // `try_integrate` rather than `integrate`: the latter panics on
-                // a bad step or a stalled clock, and this returns `Result` so
+                // The stepper rather than `try_integrate`: the same walk, but
+                // it takes the event predicate. `integrate` panics on a bad
+                // step or a stalled clock, and this path returns `Result` so
                 // serve can send the client an Error down its graceful-halt
-                // path. A `dt` wider than the segment is not clamped here — the
+                // path. A `dt` wider than the segment is not clamped — the
                 // last step of a segment lands on `segment_end` itself, which
                 // is what a segment ending at a switch of the right-hand side
                 // needs.
-                state = Rk4
-                    .try_integrate(bound, state, t, segment_end, *dt, |_, _| {})
+                let mut stepper = Rk4.stepper(bound, state.clone(), t, *dt);
+                // As in the adaptive arms: a later segment starts from a state
+                // the check has already accepted, and `FixedStepper` documents
+                // that asking again about the same `(t, state)` can change what
+                // a stateful predicate answers.
+                if segment.is_continuation() {
+                    stepper = stepper.from_checked_state();
+                }
+                let outcome = stepper
+                    .advance_to(segment_end, |_, _| {}, event_check)
                     .map_err(span)?;
+                (outcome, stepper.t(), stepper.into_state())
             }
             IntegratorConfig::Dp45 { dt, tolerances } => {
                 let mut stepper =
                     DormandPrince.stepper(bound, state.clone(), t, *dt, tolerances.clone());
                 // A later segment starts from the state the previous one ended
-                // on, which this loop asks no predicate about at all.
+                // on, which the predicate has already accepted.
                 if segment.is_continuation() {
                     stepper = stepper.from_checked_state();
                 }
-                stepper
-                    .advance_to(
-                        segment_end,
-                        |_, _| {},
-                        |_, _| ControlFlow::<String>::Continue(()),
-                    )
+                let outcome = stepper
+                    .advance_to(segment_end, |_, _| {}, event_check)
                     .map_err(span)?;
-                state = stepper.into_state();
+                (outcome, stepper.t(), stepper.into_state())
             }
             IntegratorConfig::Dop853 { dt, tolerances } => {
                 let mut stepper = Dop853.stepper(bound, state.clone(), t, *dt, tolerances.clone());
                 if segment.is_continuation() {
                     stepper = stepper.from_checked_state();
                 }
-                stepper
-                    .advance_to(
-                        segment_end,
-                        |_, _| {},
-                        |_, _| ControlFlow::<String>::Continue(()),
-                    )
+                let outcome = stepper
+                    .advance_to(segment_end, |_, _| {}, event_check)
                     .map_err(span)?;
-                state = stepper.into_state();
+                (outcome, stepper.t(), stepper.into_state())
             }
+        };
+
+        state = next_state;
+
+        // An event is a normal early stop: commit where it stopped and leave
+        // the remaining segments alone. No propagation to the segment end, and
+        // no rounding of the time.
+        if let AdvanceOutcome::Event { reason } = outcome {
+            sat.state = state;
+            sat.state_t = reached_t;
+            let term = Termination {
+                t: reached_t,
+                reason,
+            };
+            sat.terminated = Some(term.clone());
+            return Ok(Some(term));
         }
     }
 
     sat.state = state;
-    Ok(())
+    sat.state_t = t1;
+    Ok(None)
 }
 
 /// Run one controller tick at `t_next`: read the sensors, call the plugin, and
@@ -569,6 +647,11 @@ pub fn tick_controller(
     t_next: f64,
     epoch: Option<&Epoch>,
 ) -> Result<(), String> {
+    // The sensors would be read from a state that belongs to an earlier time.
+    if sat.terminated.is_some() {
+        return Ok(());
+    }
+
     // センサ評価 + プラグイン呼び出し。
     let current_epoch = epoch.map(|e| e.add_si_seconds(t_next));
     let sensors = sat
@@ -904,6 +987,8 @@ mod tests {
         let sat = ControlledSatellite {
             dynamics,
             state,
+            state_t: 0.0,
+            terminated: None,
             controller: Box::new(controller),
             sensors: SensorBundle::default(),
             actuators: ActuatorBundle::new(),
@@ -917,6 +1002,165 @@ mod tests {
             ticks_done: 0,
         };
         (sat, ticks)
+    }
+
+    /// The satellite from `satellite_with`, moved to 110 km and dropped
+    /// straight down at 1 km/s: it crosses Earth's `atmosphere_altitude`
+    /// (100 km, the Kármán line) about ten seconds later.
+    fn falling_satellite(period: f64) -> (ControlledSatellite, Arc<std::sync::Mutex<Vec<f64>>>) {
+        let (mut sat, ticks) = satellite_with(period, 0.0);
+        let r = KnownBody::Earth.properties().radius + 110.0;
+        sat.state.plant.orbit = orts::orbital::OrbitalState::new(
+            Vector3::new(r, 0.0, 0.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+        );
+        (sat, ticks)
+    }
+
+    #[test]
+    fn every_integrator_stops_a_falling_satellite() {
+        // The detection time is the first step end past the line, so it is the
+        // step size that decides it: 1 s for Rk4, and whatever the adaptive
+        // pair accepted for the others.
+        for (integrator, expected_t) in [
+            (crate::cli::IntegratorChoice::Rk4, 10.0),
+            (crate::cli::IntegratorChoice::Dp45, 12.0),
+            (crate::cli::IntegratorChoice::Dop853, 12.0),
+        ] {
+            let params = params_with(integrator, 1.0, 1e-9);
+            let (mut sat, ticks) = falling_satellite(4.0);
+            let term = advance_controlled(&mut sat, 0.0, 60.0, &params)
+                .expect("the span is finite everywhere")
+                .unwrap_or_else(|| panic!("{integrator:?} propagated past the Kármán line"));
+
+            assert!(
+                term.reason.contains("atmospheric entry"),
+                "{integrator:?}: {}",
+                term.reason
+            );
+            assert!(
+                (term.t - expected_t).abs() < 1e-9,
+                "{integrator:?} stopped at {} s, expected {expected_t}",
+                term.t
+            );
+            assert_eq!(sat.state_t, term.t, "{integrator:?}: state and time agree");
+            let alt =
+                sat.state.plant.orbit.position().magnitude() - KnownBody::Earth.properties().radius;
+            assert!(
+                (0.0..100.0).contains(&alt),
+                "{integrator:?} committed the state from {alt} km, which is not inside the atmosphere"
+            );
+
+            // A tick lands on 12 s, which is where the adaptive pair stops: the
+            // controller must not be called at an instant the satellite did not
+            // reach.
+            let ticks = ticks.lock().expect("no panics in these tests").clone();
+            assert!(
+                ticks.iter().all(|&tick| tick < term.t),
+                "{integrator:?} ticked at or past the termination: {ticks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_in_a_middle_segment_leaves_the_later_ones_unrun() {
+        use orts::spacecraft::{BurnWindow, ScheduledBurn, Thruster};
+
+        // A burn window at [1, 3) cuts the span into [0,1), [1,3), [3,30].
+        let (mut sat, _) = falling_satellite(100.0);
+        sat.state.plant.orbit = orts::orbital::OrbitalState::new(
+            Vector3::new(KnownBody::Earth.properties().radius + 110.0, 0.0, 0.0),
+            Vector3::new(-6.0, 0.0, 0.0),
+        );
+        sat.dynamics = std::mem::replace(
+            &mut sat.dynamics,
+            orts::spacecraft::SpacecraftDynamics::new(
+                arika::earth::MU,
+                Box::new(orts::orbital::gravity::PointMass),
+                nalgebra::Matrix3::identity(),
+            ),
+        )
+        .with_model(
+            Thruster::new(10.0, 300.0, Vector3::x()).with_profile(Box::new(ScheduledBurn {
+                windows: vec![BurnWindow::full(1.0, 3.0)],
+            })),
+        );
+
+        let params = params_with(crate::cli::IntegratorChoice::Rk4, 1.0, 1e-9);
+        let term = advance_controlled(&mut sat, 0.0, 30.0, &params)
+            .expect("the burn and the fall are finite")
+            .expect("6 km/s down from 110 km crosses the line inside [1, 3)");
+
+        assert!(term.t > 1.0 && term.t < 3.0, "stopped at {} s", term.t);
+        assert_eq!(sat.state_t, term.t, "the committed time is the crossing's");
+        let alt =
+            sat.state.plant.orbit.position().magnitude() - KnownBody::Earth.properties().radius;
+        assert!(
+            (0.0..100.0).contains(&alt),
+            "the state came from {alt} km, so a later segment ran"
+        );
+    }
+
+    #[test]
+    fn a_satellite_below_the_surface_stops_before_integrating() {
+        let params = params_with(crate::cli::IntegratorChoice::Rk4, 1.0, 1e-9);
+        let (mut sat, ticks) = falling_satellite(4.0);
+        let inside = KnownBody::Earth.properties().radius * 0.5;
+        sat.state.plant.orbit = orts::orbital::OrbitalState::new(
+            Vector3::new(inside, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        );
+
+        let term = advance_controlled(&mut sat, 0.0, 60.0, &params)
+            .expect("no integration to fail")
+            .expect("a state below the surface has already terminated");
+        assert!(term.reason.contains("collision"), "{}", term.reason);
+        assert_eq!(term.t, 0.0, "it stopped where the span started");
+        assert_eq!(sat.state_t, 0.0, "nothing was propagated");
+        assert!(
+            ticks.lock().expect("no panics in these tests").is_empty(),
+            "the controller ran for a satellite that never flew"
+        );
+    }
+
+    #[test]
+    fn a_terminated_satellite_is_not_advanced_again() {
+        let params = params_with(crate::cli::IntegratorChoice::Rk4, 1.0, 1e-9);
+        let (mut sat, ticks) = falling_satellite(4.0);
+        advance_controlled(&mut sat, 0.0, 60.0, &params)
+            .expect("integrates")
+            .expect("stops");
+        let state_t = sat.state_t;
+        let position = *sat.state.plant.orbit.position();
+        let ticks_before = ticks.lock().expect("no panics in these tests").len();
+
+        let again = advance_controlled(&mut sat, 60.0, 120.0, &params).expect("integrates");
+        assert!(again.is_none(), "a termination must be reported once");
+        assert_eq!(sat.state_t, state_t, "the state stayed where it stopped");
+        assert_eq!(*sat.state.plant.orbit.position(), position);
+        assert_eq!(
+            ticks.lock().expect("no panics in these tests").len(),
+            ticks_before,
+            "the controller ran after the satellite stopped"
+        );
+    }
+
+    #[test]
+    fn the_fleet_clock_ignores_terminated_satellites() {
+        let (mut dead, _) = satellite_with(1.0, 0.0);
+        dead.terminated = Some(Termination {
+            t: 0.5,
+            reason: "atmospheric entry".to_string(),
+        });
+        let (alive, _) = satellite_with(7.0, 0.0);
+        // The dead satellite's next tick is at 1 s, the live one's at 7 s.
+        assert_eq!(next_fleet_event_t(&[dead, alive], 100.0), 7.0);
+    }
+
+    /// A predicate that lets every state through: these tests are about the
+    /// integration, not about when a satellite stops.
+    fn never_ends(_t: f64, _s: &AugmentedState<SpacecraftState>) -> ControlFlow<String> {
+        ControlFlow::Continue(())
     }
 
     /// A `SimParams` carrying just the fields the controlled loop reads.
@@ -1198,8 +1442,14 @@ mod tests {
         while t < 1.0 - 1e-12 {
             let next_t = next_fleet_event_t(&fleet, 1.0);
             for sat in &mut fleet {
-                propagate_controlled(sat, t, next_t, &IntegratorConfig::Rk4 { dt: 0.01 })
-                    .expect("integrates");
+                propagate_controlled(
+                    sat,
+                    t,
+                    next_t,
+                    &IntegratorConfig::Rk4 { dt: 0.01 },
+                    &never_ends,
+                )
+                .expect("integrates");
                 if sat.tick_due_at(next_t) {
                     tick_controller(sat, next_t, None).expect("ticks");
                 }
@@ -1609,7 +1859,7 @@ path = "does-not-exist.wasm"
             );
             let mass_before = sat.state.plant.mass;
 
-            propagate_controlled(&mut sat, 0.0, 10.0, &integrator)
+            propagate_controlled(&mut sat, 0.0, 10.0, &integrator, &never_ends)
                 .expect("the burn and the orbit are finite everywhere");
 
             let spent = mass_before - sat.state.plant.mass;
@@ -1636,14 +1886,26 @@ path = "does-not-exist.wasm"
         for bound in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let (mut sat, _) = satellite_with(1.0, 0.0);
             assert!(
-                propagate_controlled(&mut sat, 0.0, bound, &IntegratorConfig::Rk4 { dt: 1.0 })
-                    .is_err(),
+                propagate_controlled(
+                    &mut sat,
+                    0.0,
+                    bound,
+                    &IntegratorConfig::Rk4 { dt: 1.0 },
+                    &never_ends
+                )
+                .is_err(),
                 "a target of {bound} was accepted"
             );
             let (mut sat, _) = satellite_with(1.0, 0.0);
             assert!(
-                propagate_controlled(&mut sat, bound, 10.0, &IntegratorConfig::Rk4 { dt: 1.0 })
-                    .is_err(),
+                propagate_controlled(
+                    &mut sat,
+                    bound,
+                    10.0,
+                    &IntegratorConfig::Rk4 { dt: 1.0 },
+                    &never_ends
+                )
+                .is_err(),
                 "a start of {bound} was accepted"
             );
         }
@@ -1707,8 +1969,14 @@ path = "does-not-exist.wasm"
         .with_model(BreaksAfter { breaks_at: 0.2 });
         let before = sat.state.clone();
 
-        let err = propagate_controlled(&mut sat, 0.0, 1.0, &IntegratorConfig::Rk4 { dt: 1.0 })
-            .expect_err("the second segment is not finite");
+        let err = propagate_controlled(
+            &mut sat,
+            0.0,
+            1.0,
+            &IntegratorConfig::Rk4 { dt: 1.0 },
+            &never_ends,
+        )
+        .expect_err("the second segment is not finite");
         assert!(err.contains("non-finite state"), "unexpected error: {err}");
         assert_eq!(
             sat.state.plant.orbit.position(),

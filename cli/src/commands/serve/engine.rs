@@ -104,24 +104,47 @@ impl SimGroup {
     /// controller output cannot be trusted (bad command, guest trap, stream-io
     /// overrun fault, ...), so the error is propagated and the caller halts
     /// the simulation instead of integrating bad state forward.
+    /// `metas` is the caller's satellite metadata in group order, which is
+    /// where the real ids live: an entry that waits must not depend on the
+    /// group's ordering staying put, so what is queued is the id. Only a
+    /// satellite that stopped costs one.
+    ///
+    /// `stopped` is an argument rather than a return value so a later
+    /// satellite's error does not discard what was already collected: those
+    /// satellites are marked terminated and answer `None` from then on, so a
+    /// dropped entry is a termination that is never reported.
     fn step_controlled_to(
         &mut self,
         current_t: f64,
         target_t: f64,
         params: &SimParams,
+        stopped: &mut Vec<(SatId, crate::sim::controlled::Termination)>,
+        metas: &[SatMeta],
     ) -> Result<(), String> {
         let SimGroup::Controlled(sats) = self else {
             return Ok(());
         };
-        for sat in sats.iter_mut() {
+        // The two are built together, satellite by satellite, and nothing
+        // removes or reorders either; this says so where an id is read.
+        assert_eq!(
+            metas.len(),
+            sats.len(),
+            "the satellite metadata and the controlled group have drifted apart"
+        );
+        for (i, sat) in sats.iter_mut().enumerate() {
             crate::config::validate_sample_period(sat.controller.sample_period())?;
             // `target_t - current_t` is the stream/output interval, which has
             // no reason to be a multiple of the controller period: this used
             // to call the controller once per span with `dt = span`, so a span
             // shorter than the period ran the controller too often and
             // shortened its hold.
-            crate::sim::controlled::advance_controlled(sat, current_t, target_t, params)
+            let term = crate::sim::controlled::advance_controlled(sat, current_t, target_t, params)
                 .map_err(|e| format!("controlled simulation error at t={current_t:.3}: {e}"))?;
+            if let Some(term) = term {
+                // The id, not the index: the entry can wait across steps, and
+                // a satellite added meanwhile pushes onto the same vector.
+                stopped.push((SatId::from(metas[i].spec.id.as_str()), term));
+            }
         }
         Ok(())
     }
@@ -157,7 +180,7 @@ impl SimGroup {
         match self {
             SimGroup::OrbitOnly(g) => g.satellites().nth(idx).unwrap().terminated,
             SimGroup::Spacecraft(g) => g.satellites().nth(idx).unwrap().terminated,
-            SimGroup::Controlled(_) => false, // controlled sats don't terminate via event checker
+            SimGroup::Controlled(sats) => sats[idx].terminated.is_some(),
         }
     }
 
@@ -348,6 +371,19 @@ pub(super) struct ServeEngine {
     /// late-connecting clients. Bounded by [`TERMINATED_EVENTS_CAP`] to avoid
     /// unbounded growth in long-running sims with many deorbiting satellites.
     terminated_events: VecDeque<String>,
+    /// Controlled satellites that stopped and have not been reported yet.
+    ///
+    /// A satellite that stopped answers `None` from then on, so a dropped entry
+    /// is a termination nothing else would report. An error raised while
+    /// stepping a later satellite of the same interval therefore leaves the
+    /// entries here.
+    ///
+    /// A chunk that fails *after* these were taken still loses the live
+    /// broadcast — `StepOutput` reaches the manager only for a chunk that
+    /// succeeds, while the replay ring already holds the entry. That belongs to
+    /// `step_chunk`'s return contract, which the orbit-only terminations of the
+    /// same chunk share (#487).
+    pending_terminations: Vec<(SatId, crate::sim::controlled::Termination)>,
     current_t: f64,
     /// How many `stream_step` boundaries have been crossed. The next boundary
     /// is `(steps_done + 1) * stream_step`, not `current_t + stream_step`:
@@ -674,6 +710,7 @@ impl ServeEngine {
             history,
             info: info_msg,
             terminated_events: VecDeque::new(),
+            pending_terminations: Vec::new(),
             current_t: 0.0,
             steps_done: 0,
             has_perturbations,
@@ -834,8 +871,16 @@ impl ServeEngine {
             self.pump_streams_inbound(streams)?;
 
             // Controlled satellites: step in dt_ctrl increments up to target_t.
-            self.group
-                .step_controlled_to(self.current_t, target_t, &self.params)?;
+            // Into the engine's own queue: an error here halts the step, and
+            // whatever stopped before it still has to reach the client, which
+            // the next step that succeeds does.
+            self.group.step_controlled_to(
+                self.current_t,
+                target_t,
+                &self.params,
+                &mut self.pending_terminations,
+                &self.metas,
+            )?;
 
             self.pump_streams_outbound(streams)?;
 
@@ -877,6 +922,20 @@ impl ServeEngine {
                 }
 
                 all_outputs.push(hs);
+            }
+
+            // The controlled satellites are stepped outside `propagate_to`, so
+            // their terminations are added here and travel the same path: the
+            // broadcast, and the ring replayed to a client that reconnects.
+            let mut outcome = outcome;
+            for (id, term) in std::mem::take(&mut self.pending_terminations) {
+                outcome
+                    .terminations
+                    .push(orts::group::prop_group::SatelliteTermination {
+                        satellite_id: id,
+                        t: term.t,
+                        reason: term.reason,
+                    });
             }
 
             for term in &outcome.terminations {
@@ -1525,6 +1584,109 @@ orbit = { type = "circular", altitude = 50 }
         assert_eq!(out.broadcasts.len(), 1, "exactly one termination event");
         assert!(out.broadcasts[0].contains("simulation_terminated"));
         // The event is retained for late-connecting clients (status replay).
+        assert_eq!(init.engine.status_data().terminated_events.len(), 1);
+    }
+
+    #[test]
+    fn a_controlled_satellite_below_the_line_is_broadcast_once_and_kept_for_replay() {
+        use orts::plugin::{Command, PluginController, PluginError, TickInput};
+        use orts::spacecraft::SpacecraftState;
+
+        struct Idle;
+        impl PluginController for Idle {
+            fn name(&self) -> &str {
+                "idle"
+            }
+            fn sample_period(&self) -> f64 {
+                1.0
+            }
+            fn update(&mut self, _input: &TickInput<'_>) -> Result<Option<Command>, PluginError> {
+                Ok(None)
+            }
+        }
+
+        // The config gives the engine its metas and history; the group is then
+        // replaced, which is what a controlled run has and what TOML alone
+        // cannot build here (that needs a WASM plugin).
+        let mut init = engine_from_toml(
+            r#"
+[[satellites]]
+id = "doomed"
+orbit = { type = "circular", altitude = 50 }
+"#,
+        )
+        .expect("engine builds");
+
+        let body = arika::body::KnownBody::Earth;
+        let mu = body.properties().mu;
+        let dynamics = orts::setup::build_spacecraft_dynamics(
+            &body,
+            mu,
+            None,
+            &orts::setup::SatelliteParams {
+                has_drag: false,
+                ballistic_coeff: None,
+                srp_area_to_mass: None,
+                srp_cr: None,
+                disturbances: orts::setup::DisturbanceTorques::default(),
+                shape: None,
+            },
+            &[],
+            nalgebra::Matrix3::identity() * 10.0,
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
+        // 50 km up: inside the atmosphere at t=0.
+        let r = body.properties().radius + 50.0;
+        let v = (mu / r).sqrt();
+        let plant = SpacecraftState {
+            orbit: orts::orbital::OrbitalState::new(
+                nalgebra::Vector3::new(r, 0.0, 0.0),
+                nalgebra::Vector3::new(0.0, v, 0.0),
+            ),
+            attitude: orts::attitude::AttitudeState {
+                quaternion: nalgebra::Vector4::new(1.0, 0.0, 0.0, 0.0),
+                angular_velocity: nalgebra::Vector3::zeros(),
+            },
+            mass: 500.0,
+        };
+        let state = dynamics.initial_augmented_state(plant);
+        init.engine.group = SimGroup::Controlled(vec![ControlledSatellite::for_test(
+            dynamics,
+            state,
+            Box::new(Idle),
+            body,
+        )]);
+
+        let first = init
+            .engine
+            .step_chunk(1, &mut NullStreamIo)
+            .expect("a termination is not an error");
+        assert_eq!(
+            first.broadcasts.len(),
+            1,
+            "the client hears about the termination once: {:?}",
+            first.broadcasts
+        );
+        assert!(first.broadcasts[0].contains("simulation_terminated"));
+        assert!(
+            first.broadcasts[0].contains("doomed"),
+            "the message carries the satellite's own id: {}",
+            first.broadcasts[0]
+        );
+        assert_eq!(init.engine.status_data().terminated_events.len(), 1);
+
+        // A second step must not repeat it: the satellite is terminated and
+        // `advance_controlled` answers nothing new.
+        let second = init
+            .engine
+            .step_chunk(1, &mut NullStreamIo)
+            .expect("stepping a stopped fleet is not an error");
+        assert!(
+            second.broadcasts.is_empty(),
+            "the termination was broadcast again: {:?}",
+            second.broadcasts
+        );
         assert_eq!(init.engine.status_data().terminated_events.len(), 1);
     }
 

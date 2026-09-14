@@ -1,5 +1,3 @@
-use std::ops::ControlFlow;
-
 use arika::body::KnownBody;
 use arika::frame::{SimpleEci, Vec3};
 use orts::OrbitalState;
@@ -498,42 +496,13 @@ fn report_contact_windows(params: &SimParams, monitors: Vec<VisibilityMonitor<Si
     }
 }
 
-/// Terminate a satellite on surface impact or atmospheric entry.
-///
-/// Generic over the state so the orbit-only and spacecraft paths share one
-/// termination rule: both only need the position.
-fn body_event_checker<S: HasPosition>(
-    params: &SimParams,
-) -> impl Fn(f64, &S) -> ControlFlow<String> + Send + 'static {
-    let props = params.body.properties();
-    let body_radius = props.radius;
-    let atmosphere_altitude = props.atmosphere_altitude;
-    move |_t: f64, state: &S| {
-        let r = state.position().magnitude();
-        if r < body_radius {
-            ControlFlow::Break(format!("collision at {:.1} km altitude", r - body_radius))
-        } else if let Some(atm_alt) = atmosphere_altitude {
-            if r < body_radius + atm_alt {
-                ControlFlow::Break(format!(
-                    "atmospheric entry at {:.1} km altitude",
-                    r - body_radius
-                ))
-            } else {
-                ControlFlow::Continue(())
-            }
-        } else {
-            ControlFlow::Continue(())
-        }
-    }
-}
-
 /// Run the orbit-only simulation and return a Recording.
 pub fn run_simulation(params: &SimParams) -> Result<Recording, CmdError> {
     use crate::sim::core::sat_params;
     use orts::setup::{build_orbital_system, default_third_bodies};
 
     let mut group = IndependentGroup::new(params.integrator_config())
-        .with_event_checker(body_event_checker::<OrbitalState>(params));
+        .with_event_checker(crate::sim::core::body_event_checker::<OrbitalState>(params));
 
     let third_bodies = default_third_bodies(&params.body).map_err(|e| {
         CmdError::failure(format!(
@@ -578,10 +547,11 @@ pub fn run_spacecraft_simulation(params: &SimParams) -> Result<Recording, CmdErr
     use orts::setup::default_third_bodies;
     use orts::spacecraft::SpacecraftState;
 
-    let mut group =
-        IndependentGroup::new(params.integrator_config()).with_event_checker(body_event_checker::<
-            orts::effector::AugmentedState<SpacecraftState>,
-        >(params));
+    let mut group = IndependentGroup::new(params.integrator_config()).with_event_checker(
+        crate::sim::core::body_event_checker::<orts::effector::AugmentedState<SpacecraftState>>(
+            params,
+        ),
+    );
 
     let third_bodies = default_third_bodies(&params.body).map_err(|e| {
         CmdError::failure(format!(
@@ -1282,21 +1252,32 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             crate::sim::controlled::advance_controlled(sat, t, next_t, params)
         };
 
-        // `try_for_each` rather than `for_each` + exit: a rayon worker calling
-        // `std::process::exit` tears the process down from inside the pool,
-        // skipping every caller's cleanup. Collect the first error instead.
-        if parallel_step {
+        // `map` + `collect::<Result<..>>` rather than `for_each` + exit: a
+        // rayon worker calling `std::process::exit` tears the process down from
+        // inside the pool, skipping every caller's cleanup. Collect the first
+        // error instead, along with whichever satellites stopped in this step.
+        let stopped: Vec<(usize, crate::sim::controlled::Termination)> = if parallel_step {
             use rayon::prelude::*;
             satellites
                 .par_iter_mut()
-                .try_for_each(step_one)
-                .map_err(|e| CmdError::failure(format!("simulation error at t={t:.3}: {e}")))?;
+                .enumerate()
+                .map(|(i, sat)| step_one(sat).map(|term| term.map(|term| (i, term))))
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|e| CmdError::failure(format!("simulation error at t={t:.3}: {e}")))?
+                .into_iter()
+                .flatten()
+                .collect()
         } else {
-            for sat in &mut satellites {
-                step_one(sat)
+            let mut stopped = Vec::new();
+            for (i, sat) in satellites.iter_mut().enumerate() {
+                let term = step_one(sat)
                     .map_err(|e| CmdError::failure(format!("simulation error at t={t:.3}: {e}")))?;
+                if let Some(term) = term {
+                    stopped.push((i, term));
+                }
             }
-        }
+            stopped
+        };
 
         // FSW からの downlink（テレメトリ / ISL）を回収してログに出す。
         // controller が msg-io 未対応なら default 実装で空。
@@ -1320,6 +1301,28 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             }
         }
 
+        // A satellite that stopped is recorded at the time it stopped, which is
+        // inside this step rather than at its end, and is left out of every
+        // sample after that.
+        //
+        // The comparison with `last_output_t` is strict: a satellite that was
+        // already below the surface terminates at t=0, where the initial
+        // sample sits, and recording it again would put two rows on one entity
+        // at one sim time.
+        for (i, term) in &stopped {
+            // stderr: stdout carries the CSV stream and the `--json` summary,
+            // and the orbit-only path reports there for the same reason.
+            eprintln!(
+                "Simulation terminated at t={:.2}s for {}: {}",
+                term.t, params.satellites[*i].id, term.reason
+            );
+            if term.t > last_output_t {
+                let sat = &satellites[*i];
+                let tp = TimePoint::new().with_sim_time(term.t).with_step(step);
+                log_controlled_state(&mut rec, &sat_paths[*i], &tp, term.t, sat);
+            }
+        }
+
         // The event time itself, not `t + dt`. The subtraction that made `dt`
         // is exact at every magnitude measured (base 0 through 1e15, 0.1 s
         // period), so the two agree today — but the tick schedule is
@@ -1328,18 +1331,28 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
         t = next_t;
 
         // 可視性は出力間引きと独立に、制御 tick ごとにサンプリングする。
+        // 全機終了の判定より前に置く: そうしないと、最後の衛星が終了した区間
+        // では終了状態が monitor に渡らず、同じ衛星の contact window の終端が
+        // 「ほかに生存機がいるか」で変わってしまう。
         if let Some(monitors) = visibility.as_mut() {
             feed_visibility(
                 monitors,
                 &mut vis_last_t,
-                satellites
-                    .iter()
-                    .map(|s| (t, *s.state.plant.orbit.position())),
+                satellites.iter().map(|s| {
+                    // A satellite that stopped keeps its last position: the
+                    // monitors take one sample per satellite per call, so it is
+                    // its own state at its own last time, not an extrapolation.
+                    (s.state_t.min(t), *s.state.plant.orbit.position())
+                }),
             );
         }
 
         if t >= next_output_t - 1e-12 {
-            for (i, sat) in satellites.iter().enumerate() {
+            for (i, sat) in satellites
+                .iter()
+                .enumerate()
+                .filter(|(_, sat)| sat.terminated.is_none())
+            {
                 let tp = TimePoint::new().with_sim_time(t).with_step(step);
                 log_controlled_state(&mut rec, &sat_paths[i], &tp, t, sat);
             }
@@ -1347,11 +1360,20 @@ fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Record
             last_output_t = t;
             next_output_t += params.output_interval;
         }
+
+        if satellites.iter().all(|sat| sat.terminated.is_some()) {
+            break;
+        }
     }
 
     // 最終状態を記録（output_interval と duration が割り切れない場合）。
+    // 終了した衛星は終了時刻で 1 度記録済みなので除く。
     if (t - last_output_t) > 1e-9 {
-        for (i, sat) in satellites.iter().enumerate() {
+        for (i, sat) in satellites
+            .iter()
+            .enumerate()
+            .filter(|(_, sat)| sat.terminated.is_none())
+        {
             let tp = TimePoint::new().with_sim_time(t).with_step(step);
             log_controlled_state(&mut rec, &sat_paths[i], &tp, t, sat);
         }

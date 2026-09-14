@@ -646,6 +646,24 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `mode = "controlled"` never stopped a satellite that hit the surface or
+  entered the atmosphere. orbit-only and spacecraft hand `body_event_checker`
+  to `IndependentGroup`; the controlled loop integrated with no predicate — the
+  adaptive arms passed a `Continue`-only closure and `Rk4` used
+  `try_integrate`, which has no hook — so a satellite below the surface kept
+  being propagated, and `serve` answered `false` from its terminated check by
+  construction. All three integrators now go through
+  `stepper().advance_to(..., event_check)`: reaching the target commits the
+  target time, an event commits the state and time the stepper stopped at, and
+  an integration error still leaves the satellite where it was. The check comes
+  before the controller, so a tick scheduled at the instant a satellite stopped
+  is not run, and a satellite added below the surface never integrates. One
+  satellite stopping does not end the fleet's run: `run` records it once at its
+  own termination time, reports it the way orbit-only does, and leaves it out
+  of later samples and of the visibility feed, while `serve` sends
+  `simulation_terminated` for it through the path that already feeds the
+  broadcast and the reconnect ring.
+  ([#442](https://github.com/sksat/orts/issues/442))
 - Running `orts replay` twice on the same RRD sent different messages, because it
   grouped the loaded states in a `HashMap` keyed by entity path. What followed that
   iteration order: the satellite list in the `Info` message, the entity whose
