@@ -650,12 +650,13 @@ section is subdivided by package.
   whichever satellite the config listed first, so a fleet of a 5500 s and a
   7000 s orbit ran for 5500 s or 7000 s depending on the order they were
   written in. The fleet shares one clock, so "one orbit" is now the longest
-  period in it — the only choice that gives every satellite its orbit. The
-  orbit-only and spacecraft paths still end each satellite at its own period,
-  which one clock cannot do. A period that is not a positive finite number
-  carries no orbit to cover and is skipped, leaving the historical 3600 s — a
-  fallback the CLI does not reach, since an empty fleet is routed to orbit-only
-  and a non-finite orbit is refused when the config is read.
+  period in it: the shortest horizon that gives every satellite at least one
+  initial orbital period. The orbit-only and spacecraft paths still end each
+  satellite at its own period. A period that is not a positive finite number
+  carries no orbit to cover and is skipped, leaving the historical 3600 s —
+  reachable from an accepted config, since a circular orbit is validated on a
+  finite altitude and `radius + altitude > 0` while `2 pi sqrt(r0^3 / mu)` is
+  infinite for `r0 = 1e103` and zero for `r0 = 1e-200`.
   ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` ignored `output_interval` whenever the controller was
   slower than it: a span ended only at a controller tick or at `duration`, so

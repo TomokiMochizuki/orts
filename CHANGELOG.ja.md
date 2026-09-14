@@ -531,11 +531,12 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 #### Fixed
 - `--duration` を省略した `mode = "controlled"` の run が、config に最初に書かれた衛星の軌道周期
   ぶんで終わっていた。周期 5500 s と 7000 s の 2 機なら、記述順だけで run の長さが 5500 s か
-  7000 s に変わる。fleet は時計を共有するので、「一周」は最長周期にした — 全機が少なくとも一周する
-  唯一の選び方。orbit-only と spacecraft は従来どおり衛星ごとに自分の周期で終わる(共有時計では
-  できないこと)。正で有限でない周期は覆うべき軌道を持たないので飛ばし、使える周期が
-  残らなければ従来の 3600 s になる。ただし CLI はここに来ない(衛星がいなければ orbit-only に
-  振られ、非有限な軌道は config の読み込みで拒否される)。
+  7000 s に変わる。fleet は時計を共有するので、「一周」は最長周期にした。全機に少なくとも 1 周期ぶんの
+  時間を与える最短の horizon である。orbit-only と spacecraft は従来どおり衛星ごとに自分の周期で
+  終わる。正で有限でない周期は覆うべき軌道を持たないので飛ばし、使える周期が残らなければ従来の
+  3600 s になる。これは受理される config から到達しうる: 円軌道の検証は高度が有限で
+  `radius + altitude > 0` であることだけを見るが、周期 `2 pi sqrt(r0^3 / mu)` は `r0 = 1e103` で
+  inf、`r0 = 1e-200` で 0 になる。
   ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` が、controller が `output_interval` より遅いと `output_interval` を
   無視していた。span の終端が controller tick か `duration` だけだったので、controller period 1 s

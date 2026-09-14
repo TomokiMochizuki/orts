@@ -1163,9 +1163,12 @@ fn monitors_want(span_end_t: f64, fleet_event_t: f64, duration: f64, stopped_any
 ///
 /// A period that is not a positive finite number carries no orbit to cover and
 /// is skipped; with nothing usable left the answer is the historical 3600 s.
-/// The CLI does not reach that case — an empty fleet is routed to orbit-only,
-/// and a non-finite orbit is refused when the config is read — so it is a
-/// fallback, not a documented default.
+///
+/// That is reachable from a config the CLI accepts. A circular orbit is
+/// validated on a finite altitude and `radius + altitude > 0`, while the period
+/// is `2 pi sqrt(r0^3 / mu)`: measured in f64, `r0 = 1e103` makes `r0^3`
+/// infinite and the period with it, and `r0 = 1e-200` makes both zero. Such a
+/// run covers an hour rather than an orbit nobody can integrate.
 fn fleet_duration(explicit: Option<f64>, periods: impl Iterator<Item = f64>) -> f64 {
     if let Some(duration) = explicit {
         return duration;
