@@ -166,7 +166,8 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   その定数を落とした。この field は「Constants matched to Rust orts」という注記の下にありながら、
   Orekit の drag は co-rotation 速度を ITRF 変換から取るので、reference データが何で生成された
   かを表していなかった。`OMEGA` を訂正した以上、一致すべき Rust 側の値も無い。この field を
-  読む箇所は無い。([#480](https://github.com/sksat/orts/pull/480))
+  読む箇所は無い。GCRF 側の generator が持っていた同じ定数(どこからも使われていなかった)も
+  併せて落とした。([#480](https://github.com/sksat/orts/pull/480))
 - パネル drag の加速度 snapshot 2 件が相対許容で比較するようになった。従来は
   `1e-12 * expected.magnitude().max(1.0)` で、加速度が約 1e-9 なので floor により許容が
   絶対値 1e-12 — 値自体の 790 倍 — になり、加速度がゼロでも assert が通っていた。隣にある

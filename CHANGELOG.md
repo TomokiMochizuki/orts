@@ -208,7 +208,8 @@ section is subdivided by package.
   "Constants matched to Rust orts" note while Orekit's drag takes the
   co-rotation velocity from the ITRF transform, so it never described what
   generated the reference data — and with `OMEGA` corrected there is no Rust
-  value for it to match. Nothing reads the field. ([#480](https://github.com/sksat/orts/pull/480))
+  value for it to match. Nothing reads the field. The GCRF generator's copy of
+  the same constant, which nothing used at all, goes with it. ([#480](https://github.com/sksat/orts/pull/480))
 - The two panel-drag acceleration snapshots compare against a relative
   tolerance. They read `1e-12 * expected.magnitude().max(1.0)`, and the
   accelerations are ~1e-9, so the floor made the bound 1e-12 absolute — 790
