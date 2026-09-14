@@ -29,19 +29,32 @@ class ChartBufferStub implements ChartBufferLike {
 /** Minimal IngestBuffer stub. No uneri/Worker dependency. */
 class IngestBufferStub implements IngestBufferLike<OrbitPoint> {
   private _points: OrbitPoint[] = [];
+  private _pending: OrbitPoint[] = [];
   private _latestT = -Infinity;
   private _rebuildData: OrbitPoint[] | null = null;
 
   push(point: OrbitPoint): void {
     this._points.push(point);
+    this._pending.push(point);
     if (point.t > this._latestT) this._latestT = point.t;
   }
 
+  /** As the real one does: the array is retained, not copied. */
   markRebuild(points: OrbitPoint[]): void {
     this._rebuildData = points;
+    this._pending = [];
     if (points.length > 0) {
       this._latestT = Math.max(...points.map((p) => p.t));
     }
+  }
+
+  /** As the real one does: the retained array plus what arrived since. */
+  consumeRebuild(): OrbitPoint[] | null {
+    if (this._rebuildData === null) return null;
+    const result = [...this._rebuildData, ...this._pending];
+    this._rebuildData = null;
+    this._pending = [];
+    return result;
   }
 
   get rebuildData(): OrbitPoint[] | null {
@@ -185,6 +198,39 @@ describe("createEventDispatcher", () => {
 
     const existing = buffers.ingestBuffers.get("sat1") as unknown as IngestBufferStub;
     expect(existing.rebuildData?.map((p) => p.t)).toEqual([0, 10, 20]);
+  });
+
+  // The rebuild data must be a snapshot, not the trail's own array: a state
+  // arriving before the worker consumes the rebuild would otherwise be both
+  // in the retained array and in `pending`, and `consumeRebuild` returns the
+  // two concatenated.
+  it("does not repeat a sample that arrives during the rebuild", () => {
+    const buffers = createTestBuffers();
+    const state = createTestState();
+    const dispatch = createEventDispatcher(buffers, state, "ws-0");
+    dispatch("ws-0", { kind: "info", info: makeSimInfo() });
+    for (const t of [0, 10]) {
+      dispatch("ws-0", { kind: "state", point: makePoint(t, "sat1") });
+    }
+
+    dispatch("ws-0", {
+      kind: "satellite-added",
+      satellite: {
+        id: "sat2",
+        name: "sat2",
+        altitude: 700,
+        period: 5900,
+        perturbations: ["drag"],
+        shape: null,
+      },
+      t: 10,
+    });
+    // One more sample before the worker's next tick.
+    dispatch("ws-0", { kind: "state", point: makePoint(20, "sat1") });
+
+    const buf = buffers.ingestBuffers.get("sat1") as unknown as IngestBufferStub;
+    const rebuilt = buf.consumeRebuild();
+    expect(rebuilt?.map((p) => p.t)).toEqual([0, 10, 20]);
   });
 
   it("info event sets simInfo and serverState", () => {

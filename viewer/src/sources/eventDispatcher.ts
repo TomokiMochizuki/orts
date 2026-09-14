@@ -118,6 +118,19 @@ function getOrCreateTrailBuffer(map: Map<string, TrailBuffer>, id: string): Trai
   return getOrCreate(map, id, () => trailBufferFactory(id));
 }
 
+/** Hand a buffer the trail as its replacement dataset, as a snapshot.
+ *
+ * `TrailBuffer.getAll()` returns its own array and `markRebuild` retains what
+ * it is given, while later pushes queue separately and `consumeRebuild`
+ * returns the two concatenated — so passing the live array counts anything
+ * that arrives in between twice.
+ */
+function rebuildFromTrails(buffers: RuntimeBuffers): void {
+  for (const [id, buf] of buffers.trailBuffers) {
+    getOrCreateIngestBuffer(buffers.ingestBuffers, id).markRebuild([...buf.getAll()]);
+  }
+}
+
 function getOrCreateIngestBuffer(
   map: Map<string, IngestBufferLike<OrbitPoint>>,
   id: string,
@@ -190,9 +203,7 @@ export function createEventDispatcher(
         // drained out of these buffers by the old one. Rebuild from the
         // trails, as a finished chunked load does.
         if (before === 1 && after > 1) {
-          for (const [id, buf] of buffers.trailBuffers) {
-            getOrCreateIngestBuffer(buffers.ingestBuffers, id).markRebuild(buf.getAll());
-          }
+          rebuildFromTrails(buffers);
         }
         break;
       }
@@ -259,9 +270,7 @@ export function createEventDispatcher(
             for (const buf of buffers.trailBuffers.values()) buf.clear();
             buffers.chartBuffer.clear();
           }
-          for (const [id, buf] of buffers.trailBuffers) {
-            getOrCreateIngestBuffer(buffers.ingestBuffers, id).markRebuild(buf.getAll());
-          }
+          rebuildFromTrails(buffers);
           buffers.chunkLoadStarted = false; // reset for next load
         }
         break;

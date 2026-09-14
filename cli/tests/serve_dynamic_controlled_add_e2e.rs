@@ -291,6 +291,20 @@ async fn serve_dynamic_controlled_add_succeeds() {
             added["t"].as_f64().is_some(),
             "added satellite must report a time"
         );
+        // The announcement names the models built for this satellite, which
+        // the viewer keys its charts on. The controlled path reads them off
+        // `SpacecraftDynamics`, where the orbit-only path reads an
+        // `OrbitalSystem` — a separate call, so it is asserted separately.
+        let models: Vec<&str> = added["satellite"]["perturbations"]
+            .as_array()
+            .expect("perturbations is an array")
+            .iter()
+            .map(|m| m.as_str().expect("a model name"))
+            .collect();
+        assert!(
+            models.contains(&"gravity_gradient"),
+            "a controlled satellite with attitude reports its disturbance models: {models:?}"
+        );
 
         // The new satellite's first state message — the one the add itself
         // broadcast — carries what every later one does: the acceleration
