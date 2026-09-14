@@ -104,26 +104,35 @@ impl SimGroup {
     /// controller output cannot be trusted (bad command, guest trap, stream-io
     /// overrun fault, ...), so the error is propagated and the caller halts
     /// the simulation instead of integrating bad state forward.
+    /// Step the controlled satellites, and answer the ones that stopped in
+    /// this span as `(index, termination)`.
+    ///
+    /// The index is into this group; the caller turns it into the satellite's
+    /// id from `metas`, which is where the real ids live.
     fn step_controlled_to(
         &mut self,
         current_t: f64,
         target_t: f64,
         params: &SimParams,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(usize, crate::sim::controlled::Termination)>, String> {
         let SimGroup::Controlled(sats) = self else {
-            return Ok(());
+            return Ok(Vec::new());
         };
-        for sat in sats.iter_mut() {
+        let mut stopped = Vec::new();
+        for (i, sat) in sats.iter_mut().enumerate() {
             crate::config::validate_sample_period(sat.controller.sample_period())?;
             // `target_t - current_t` is the stream/output interval, which has
             // no reason to be a multiple of the controller period: this used
             // to call the controller once per span with `dt = span`, so a span
             // shorter than the period ran the controller too often and
             // shortened its hold.
-            crate::sim::controlled::advance_controlled(sat, current_t, target_t, params)
+            let term = crate::sim::controlled::advance_controlled(sat, current_t, target_t, params)
                 .map_err(|e| format!("controlled simulation error at t={current_t:.3}: {e}"))?;
+            if let Some(term) = term {
+                stopped.push((i, term));
+            }
         }
-        Ok(())
+        Ok(stopped)
     }
 
     /// Number of satellites.
@@ -157,7 +166,7 @@ impl SimGroup {
         match self {
             SimGroup::OrbitOnly(g) => g.satellites().nth(idx).unwrap().terminated,
             SimGroup::Spacecraft(g) => g.satellites().nth(idx).unwrap().terminated,
-            SimGroup::Controlled(_) => false, // controlled sats don't terminate via event checker
+            SimGroup::Controlled(sats) => sats[idx].terminated.is_some(),
         }
     }
 
@@ -834,8 +843,9 @@ impl ServeEngine {
             self.pump_streams_inbound(streams)?;
 
             // Controlled satellites: step in dt_ctrl increments up to target_t.
-            self.group
-                .step_controlled_to(self.current_t, target_t, &self.params)?;
+            let controlled_stopped =
+                self.group
+                    .step_controlled_to(self.current_t, target_t, &self.params)?;
 
             self.pump_streams_outbound(streams)?;
 
@@ -877,6 +887,20 @@ impl ServeEngine {
                 }
 
                 all_outputs.push(hs);
+            }
+
+            // The controlled satellites are stepped outside `propagate_to`, so
+            // their terminations are added here and travel the same path: the
+            // broadcast, and the ring replayed to a client that reconnects.
+            let mut outcome = outcome;
+            for (i, term) in controlled_stopped {
+                outcome
+                    .terminations
+                    .push(orts::group::prop_group::SatelliteTermination {
+                        satellite_id: orts::group::SatId::from(self.metas[i].spec.id.as_str()),
+                        t: term.t,
+                        reason: term.reason,
+                    });
             }
 
             for term in &outcome.terminations {

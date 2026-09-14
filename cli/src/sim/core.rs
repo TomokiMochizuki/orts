@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
+use std::ops::ControlFlow;
+
 use orts::OrbitalState;
+use orts::group::HasPosition;
 use orts::orbital::OrbitalSystem;
 use orts::orbital::gravity::GravityField;
 use orts::orbital::kepler::KeplerianElements;
@@ -306,6 +309,35 @@ pub fn spacecraft_dynamics_for(
         params.build_atmosphere_model(),
     )
     .map_err(|e| format!("solar force models: {e}"))
+}
+
+/// Terminate a satellite on surface impact or atmospheric entry.
+///
+/// Generic over the state so the orbit-only, spacecraft and controlled paths
+/// share one termination rule: all three only need the position.
+pub fn body_event_checker<S: HasPosition>(
+    params: &SimParams,
+) -> impl Fn(f64, &S) -> ControlFlow<String> + Send + 'static {
+    let props = params.body.properties();
+    let body_radius = props.radius;
+    let atmosphere_altitude = props.atmosphere_altitude;
+    move |_t: f64, state: &S| {
+        let r = state.position().magnitude();
+        if r < body_radius {
+            ControlFlow::Break(format!("collision at {:.1} km altitude", r - body_radius))
+        } else if let Some(atm_alt) = atmosphere_altitude {
+            if r < body_radius + atm_alt {
+                ControlFlow::Break(format!(
+                    "atmospheric entry at {:.1} km altitude",
+                    r - body_radius
+                ))
+            } else {
+                ControlFlow::Continue(())
+            }
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
 }
 
 #[cfg(test)]
