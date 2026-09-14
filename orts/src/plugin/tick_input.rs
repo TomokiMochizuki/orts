@@ -7,6 +7,7 @@
 
 use arika::epoch::Epoch;
 use arika::frame::{Body, Eci, Rotation, SimpleEci, Vec3};
+use nalgebra::Vector3;
 
 use crate::SpacecraftState;
 
@@ -149,13 +150,42 @@ impl<F: Eci> Sensors<F> {
 
 // sun sensor output types
 
+/// Normalize `v`, or answer `None` when it has no direction.
+///
+/// Scaling by the largest component first is what makes this hold for the whole
+/// finite range: the squares of components near `f64::MAX` overflow, so a plain
+/// sum of squares returns `inf` and then `NaN`, and the squares of subnormal
+/// components underflow to zero.
+pub(crate) fn normalize_finite(v: Vector3<f64>) -> Option<Vector3<f64>> {
+    if !v.iter().all(|c| c.is_finite()) {
+        return None;
+    }
+    let scale = v.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    if scale == 0.0 {
+        return None;
+    }
+    let unit = (v / scale).normalize();
+    unit.iter().all(|c| c.is_finite()).then_some(unit)
+}
+
 /// Sun direction in the body frame (unit vector, satellite→Sun).
+///
+/// The unit length is the type's invariant: [`SunDirectionBody::new`] normalizes
+/// what it is given, so a sensor that adds noise to a direction does not have to
+/// remember to normalize afterwards.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SunDirectionBody(Vec3<Body>);
 
 impl SunDirectionBody {
-    pub fn new(v: Vec3<Body>) -> Self {
-        Self(v)
+    /// Normalize `v` into a sun direction, or `None` when `v` has no direction:
+    /// any non-finite component, or a length of zero.
+    ///
+    /// Noise can produce both — a model that cancels the vector, or one that
+    /// returns `NaN`. `None` says the direction is unmeasurable, the same answer
+    /// the sensor gives in total eclipse; the two are told apart by
+    /// `illumination`, which is 0 only in eclipse.
+    pub fn new(v: Vec3<Body>) -> Option<Self> {
+        normalize_finite(v.into_inner()).map(|unit| Self(Vec3::<Body>::from_raw(unit)))
     }
     pub fn inner(&self) -> &Vec3<Body> {
         &self.0
@@ -169,6 +199,15 @@ impl SunDirectionBody {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SunSensorOutput {
     /// Fine sun sensor: direction unit vector + illumination.
+    ///
+    /// `direction` is `None` in two cases, told apart by `illumination`:
+    /// - `illumination == 0`: total eclipse, described below
+    /// - `illumination > 0`: the direction itself is unmeasurable — the
+    ///   spacecraft is at the Sun's centre, or noise left a vector with no
+    ///   direction (zero length, or a non-finite component)
+    ///
+    /// `illumination` is the geometric fraction of the Sun in view either way;
+    /// it does not report whether a direction came out.
     ///
     /// `direction` is `None` during total eclipse (illumination = 0)
     /// because the sun sensor cannot measure a direction when no sunlight
