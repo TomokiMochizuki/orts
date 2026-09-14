@@ -123,6 +123,19 @@ export function parseHeaderLine(line: string): CSVColumns | null {
   return columns;
 }
 
+/** How the writer spells a non-finite `f64`, measured from its own output.
+ *
+ * Values go through `{:.10}`, so these are Rust's `Display` forms. A recorded
+ * non-finite sample is a measurement the record layer keeps on purpose, and
+ * `Number` reads none of these spellings: `Number("inf")` is NaN, which would
+ * otherwise be indistinguishable from a malformed cell.
+ */
+const NON_FINITE: Record<string, number> = {
+  NaN: Number.NaN,
+  inf: Number.POSITIVE_INFINITY,
+  "-inf": Number.NEGATIVE_INFINITY,
+};
+
 /** One cell as a number, or `undefined` where the file left it empty.
  *
  * A satellite that has none of a model has empty cells in that model's
@@ -133,6 +146,7 @@ function cell(cells: string[], index: number | undefined): number | undefined {
   if (index === undefined) return undefined;
   const raw = cells[index];
   if (raw === undefined || raw === "") return undefined;
+  if (raw in NON_FINITE) return NON_FINITE[raw];
   const value = Number(raw);
   return Number.isNaN(value) ? undefined : value;
 }
@@ -159,10 +173,12 @@ export function parseDataLineWithColumns(line: string, columns: CSVColumns): Orb
     if (id) point.entityPath = id;
   }
 
-  // The orbital elements are optional in the file; the charts read zero for a
-  // missing one, as the positional parser does.
+  // An element the header does not name at all is read as zero, as the
+  // positional parsing did for a short line. One the header names but the row
+  // leaves empty stays unset: filling it would state a circular orbit for a
+  // row that recorded nothing.
   for (const optional of ["a", "e", "inc", "raan", "omega", "nu"]) {
-    point[optional] ??= 0;
+    if (!columns.fields.has(optional)) point[optional] = 0;
   }
   return point as unknown as OrbitPoint;
 }

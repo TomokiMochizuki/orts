@@ -121,6 +121,35 @@ describe("parseDataLineWithColumns", () => {
     expect(point?.torque_panel_drag_x).toBe(0);
   });
 
+  // The writer formats an f64 with `{:.10}`, so a non-finite sample is written
+  // as Rust prints it. Measured from its output: `NaN`, `inf`, `-inf`. The
+  // record layer keeps such a sample on purpose, so reading it as absent
+  // would lose a measurement.
+  it("reads the non-finite spellings the writer uses", () => {
+    const cells = row("sat-a", 10, { gravity_gradient: [1, 2, 3] }).split(",");
+    const columns2 = parseHeaderLine(HEADER);
+    if (!columns2) throw new Error("header");
+    cells[columns2.fields.get("torque_gravity_gradient_x") as number] = "NaN";
+    cells[columns2.fields.get("torque_gravity_gradient_y") as number] = "inf";
+    cells[columns2.fields.get("torque_gravity_gradient_z") as number] = "-inf";
+
+    const point = parseDataLineWithColumns(cells.join(","), columns);
+
+    expect(point?.torque_gravity_gradient_x).toBeNaN();
+    expect(point?.torque_gravity_gradient_y).toBe(Number.POSITIVE_INFINITY);
+    expect(point?.torque_gravity_gradient_z).toBe(Number.NEGATIVE_INFINITY);
+  });
+
+  // Filling it would state a circular orbit for a row that recorded nothing.
+  it("leaves an orbital element the header names but the row omits unset", () => {
+    const cells = row("sat-a", 10, {}).split(",");
+    cells[columns.fields.get("e") as number] = "";
+
+    const point = parseDataLineWithColumns(cells.join(","), columns);
+
+    expect(point?.e).toBeUndefined();
+  });
+
   it("refuses a row without the state vector", () => {
     const cells = row("sat-a", 10, {}).split(",");
     cells[2] = ""; // x
