@@ -240,17 +240,17 @@ pub trait EarthFixedTransform: EarthRotationPole {
     /// velocity, so it transforms velocities (and full position+velocity
     /// states), not just positions.
     ///
-    /// The angular velocity is `OMEGA · earth_pole` — Earth's nominal rotation
-    /// rate ([`earth::OMEGA`](crate::earth::OMEGA)) about the spin axis from
-    /// [`EarthRotationPole`]. This models **Earth spin transport only**: it is
+    /// The angular velocity is `ERA_RATE · earth_pole` — the rate the chain's
+    /// `R` step advances at ([`earth::ERA_RATE`](crate::earth::ERA_RATE))
+    /// about the spin axis from [`EarthRotationPole`]. This models **Earth spin transport only**: it is
     /// not the full time-derivative of the IAU 2006 W·R·Q chain (the
     /// precession/nutation/polar-motion rates Q̇/Ẇ, ~sub-µrad/s, are omitted),
-    /// and it uses the nominal rate with no LOD correction.
+    /// and it carries no LOD correction.
     fn inertial_to_fixed_transform(
         orientation: &EarthOrientation<'_, Self>,
     ) -> FrameTransform<Self, Self::Fixed> {
         // ω of ECEF relative to ECI, expressed in ECI: Earth's spin vector.
-        let omega = Self::earth_pole(orientation.utc()) * crate::earth::OMEGA;
+        let omega = Self::earth_pole(orientation.utc()) * crate::earth::ERA_RATE;
         let rotation = Self::fixed_to_inertial(orientation).inverse();
         FrameTransform::new(rotation, omega)
     }
@@ -523,14 +523,14 @@ mod tests {
     fn simple_eci_corotating_point_is_static_in_ecef() {
         // A point on the equator co-rotating with Earth (inertial velocity ω×r)
         // must be static in ECEF, regardless of ERA — validates the factory's
-        // ω = OMEGA·(+Z) wiring.
+        // ω = ERA_RATE·(+Z) wiring.
         let utc = Epoch::from_gregorian(2024, 3, 20, 7, 30, 0.0);
         let ft = <frame::SimpleEci as EarthFixedTransform>::inertial_to_fixed_transform(
             &EarthOrientation::simple(utc),
         );
         let r_km = 6378.137;
         let r = Vec3::<frame::SimpleEci>::new(r_km, 0.0, 0.0);
-        let v = Vec3::<frame::SimpleEci>::new(0.0, crate::earth::OMEGA * r_km, 0.0);
+        let v = Vec3::<frame::SimpleEci>::new(0.0, crate::earth::ERA_RATE * r_km, 0.0);
         let v_ecef = ft.transform_velocity(&r, &v);
         assert!(
             v_ecef.inner().norm() < 1e-12,
@@ -546,15 +546,17 @@ mod tests {
         let ft = <frame::Gcrs as EarthFixedTransform>::inertial_to_fixed_transform(
             &EarthOrientation::new(utc, &eop),
         );
-        // ω of ITRS relative to GCRS, in GCRS, is OMEGA along the CIP.
-        let expected =
-            <frame::Gcrs as EarthRotationPole>::earth_pole(&utc).into_inner() * crate::earth::OMEGA;
+        // ω of ITRS relative to GCRS, in GCRS, is ERA_RATE along the CIP.
+        let expected = <frame::Gcrs as EarthRotationPole>::earth_pole(&utc).into_inner()
+            * crate::earth::ERA_RATE;
         assert!(
             (ft.angular_velocity_in_from().inner() - expected).norm() < 1e-18,
-            "Gcrs spin angular velocity should be OMEGA·CIP"
+            "Gcrs spin angular velocity should be ERA_RATE·CIP"
         );
-        // |ω| ≈ OMEGA (pole is a unit vector).
-        assert!((ft.angular_velocity_in_from().inner().norm() - crate::earth::OMEGA).abs() < 1e-16);
+        // |ω| ≈ ERA_RATE (pole is a unit vector).
+        assert!(
+            (ft.angular_velocity_in_from().inner().norm() - crate::earth::ERA_RATE).abs() < 1e-16
+        );
     }
 
     #[test]
@@ -664,7 +666,7 @@ mod tests {
         );
         assert_close3(
             [v_f.inner().x, v_f.inner().y, v_f.inner().z],
-            [0.8377716286892459, 1.6187049999272265, 7.0],
+            [0.8377716697284157, 1.6187050252715176, 7.0],
             "SimpleEci inertial_to_fixed velocity",
         );
         // The inverse factory must undo it at the same epoch.
@@ -752,7 +754,7 @@ mod tests {
         );
         assert_close3(
             [v_f.inner().x, v_f.inner().y, v_f.inner().z],
-            [0.8214899007878738, 1.6208520413080323, 7.002402600668856],
+            [0.8214899418224064, 1.620852066608324, 7.002402600668856],
             "Gcrs inertial_to_fixed velocity",
         );
     }

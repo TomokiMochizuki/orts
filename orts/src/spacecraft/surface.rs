@@ -1227,14 +1227,19 @@ mod tests {
         let drag = PanelDrag::for_earth(SpacecraftShape::cube(0.5, 2.2, PanelOptics::absorber()));
         let loads = drag.eval(0.0, &snapshot_state(), Some(&snapshot_epoch()));
         let expected_a = Vector3::new(
-            -1.112965959433058e-10,
-            -2.992310652421664e-10,
-            -1.2261304328438772e-9,
+            -1.1129660282331439e-10,
+            -2.992310712799118e-10,
+            -1.2261304359573517e-9,
         );
         let a = loads.acceleration_inertial.into_inner();
         let tau = loads.torque_body.into_inner();
+        // Relative, with no absolute floor. `|a|` is ~1.3e-9 here, so a
+        // `max(1.0)` floor turned the intended 1e-12 relative bound into 1e-12
+        // absolute, which is 7.9e-4 of the value — eight orders looser than
+        // asked. The ERA-rate change moves `a` by 9.7e-18, so the old bound
+        // left a factor of 1e5 of slack and the snapshot went on passing.
         assert!(
-            (a - expected_a).magnitude() <= 1e-12 * expected_a.magnitude().max(1.0),
+            (a - expected_a).magnitude() <= 1e-12 * expected_a.magnitude(),
             "SimpleEci panel drag acceleration changed: {a:?}"
         );
         // A symmetric cube's opposite faces cancel, so the torque is zero up to
@@ -1255,13 +1260,14 @@ mod tests {
         let drag = PanelDrag::for_earth(SpacecraftShape::sphere(1.0, 2.2, 1.5));
         let loads = drag.eval(0.0, &snapshot_state(), Some(&snapshot_epoch()));
         let expected_a = Vector3::new(
-            -6.98845822315769e-11,
-            -1.8789108335182917e-10,
-            -7.699032691383112e-10,
+            -6.988458647488548e-11,
+            -1.8789108693669007e-10,
+            -7.699032702478932e-10,
         );
         let a = loads.acceleration_inertial.into_inner();
+        // Relative, with no absolute floor — see the cube snapshot above.
         assert!(
-            (a - expected_a).magnitude() <= 1e-12 * expected_a.magnitude().max(1.0),
+            (a - expected_a).magnitude() <= 1e-12 * expected_a.magnitude(),
             "SimpleEci sphere drag acceleration changed: {a:?}"
         );
     }

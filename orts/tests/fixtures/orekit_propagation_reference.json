@@ -10,7 +10,6 @@
     "j4": -1.6199e-06,
     "mu_sun_km3_s2": 132712440018.0,
     "mu_moon_km3_s2": 4902.800066,
-    "omega_earth_rad_s": 7.2921159e-05,
     "solar_radiation_pressure_pa": 4.5396e-06
   },
   "scenarios": [

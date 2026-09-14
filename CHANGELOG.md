@@ -195,6 +195,28 @@ section is subdivided by package.
   ([#469](https://github.com/sksat/orts/pull/469))
 
 #### Fixed
+- The default `omega_body` of `AtmosphericDrag` and `PanelDrag`, and the
+  `perturbations::OMEGA_EARTH` re-export, are `arika::earth::ERA_RATE`. The
+  co-rotating atmosphere turns with the frame's `R` step, so its angular
+  velocity is the rate that step advances at rather than the geodetic nominal
+  constant. **Drag accelerations and panel torques change**, by 9.46e-9 relative
+  for `AtmosphericDrag` and 7.63e-9 for `PanelDrag`'s cube — measured on the
+  snapshot states, where the tolerance is 1e-12 relative, so the expected values
+  were updated rather than the tolerance.
+- The Orekit reference fixture drops its `omega_earth_rad_s` metadata field,
+  and the generator drops the constant behind it. The field sat under a
+  "Constants matched to Rust orts" note while Orekit's drag takes the
+  co-rotation velocity from the ITRF transform, so it never described what
+  generated the reference data — and with `OMEGA` corrected there is no Rust
+  value for it to match. Nothing reads the field. The GCRF generator's copy of
+  the same constant, which nothing used at all, goes with it. ([#480](https://github.com/sksat/orts/pull/480))
+- The two panel-drag acceleration snapshots compare against a relative
+  tolerance. They read `1e-12 * expected.magnitude().max(1.0)`, and the
+  accelerations are ~1e-9, so the floor turned the intended 1e-12 relative
+  bound into 1e-12 absolute — 7.9e-4 of the value, eight orders looser than
+  asked. That left a factor of 1e5 of slack against the 9.7e-18 the ERA rate
+  moves the acceleration by, so the snapshots went on passing. The torque
+  assertion beside them already avoided a floor for this reason. ([#480](https://github.com/sksat/orts/pull/480))
 - A scheduled burn is flown even when it is shorter than an integration step.
   `IndependentGroup` and `CoupledGroup` ran the integrator from the current time
   straight to the target, so a `BurnWindow` narrower than the largest gap
@@ -943,6 +965,24 @@ section is subdivided by package.
 - **BREAKING**: `EopParseError` and `EopLookupError` are `#[non_exhaustive]`, so
   an exhaustive `match` on either needs a wildcard arm. Both gained a variant
   here and the EOP work still open will add more. ([#463](https://github.com/sksat/orts/pull/463))
+- `earth::OMEGA` is the WGS-84 nominal mean angular velocity `7.292115e-5`
+  rad/s, and the new `earth::ERA_RATE` is the rate the Earth Rotation Angle
+  advances at, `2π × 1.00273781191135448 / 86400`. **`OMEGA` changes value**:
+  it held `7.2921159e-5`, which is neither the IERS 2010 figure its doc cited
+  nor the rate the IAU 2006 chain rotates at, but the rotation rate relative to
+  the precessing equinox. `EarthFixedTransform` transports velocities with
+  `ERA_RATE` now, since that is the derivative of the `R` step it differentiates
+  — measured, the value `OMEGA` used to hold and `ERA_RATE` disagree by
+  `7.53e-12` rad/s, which is 0.0482 mm/s at the 6403 km cross-axis radius of the
+  state-transform snapshots. The corrected `OMEGA` and `ERA_RATE` differ by
+  `1.47e-12` rad/s. Both constants
+  describe the Earth-spin term alone: the full derivative of `W·R·Q` also
+  carries `Q̇`/`Ẇ` and a LOD correction, which this transform has never
+  included. `OMEGA` stays as the geodetic constant beside `MU` and `R`. ([#480](https://github.com/sksat/orts/pull/480))
+- The note on `era_formula` said arika's coefficient differed from the
+  canonical SOFA `1.00273781191135448` by about 1 ULP and that the canonical
+  value would be adopted later. Both spellings round to the same f64
+  (`0x3ff00b36cdc9f32b`), so there was nothing to adopt. ([#480](https://github.com/sksat/orts/pull/480))
 - `KeplerianElements::from_state_vector` lost the periapsis direction of an
   eccentric equatorial orbit: it zeroed both the RAAN and the argument of
   periapsis while still measuring the true anomaly from the eccentricity vector,

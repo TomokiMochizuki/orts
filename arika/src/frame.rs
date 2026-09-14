@@ -970,7 +970,9 @@ mod tests {
 
     // FrameTransform (rotation + angular velocity) ─ state transforms
 
-    const OMEGA_E: f64 = 7.2921159e-5;
+    // `SimpleEcef`'s rotation is built from the ERA, so the rate that angle
+    // advances at is what these tests differentiate it by.
+    use crate::earth::ERA_RATE;
 
     #[test]
     fn frame_transform_zero_omega_equals_rotation() {
@@ -990,7 +992,7 @@ mod tests {
     fn frame_transform_inverse_state_roundtrip() {
         let ft = FrameTransform::new(
             Rotation::<SimpleEci, SimpleEcef>::from_era(1.1),
-            Vec3::<SimpleEci>::new(0.0, 0.0, OMEGA_E),
+            Vec3::<SimpleEci>::new(0.0, 0.0, ERA_RATE),
         );
         let r = Vec3::<SimpleEci>::new(6778.0, 0.0, 0.0);
         let v = Vec3::<SimpleEci>::new(0.0, 7.5, 1.0);
@@ -1006,11 +1008,11 @@ mod tests {
         // co-rotating with Earth (inertial velocity ω × r) is static in ECEF.
         let ft = FrameTransform::new(
             Rotation::<SimpleEci, SimpleEcef>::from_era(0.0),
-            Vec3::<SimpleEci>::new(0.0, 0.0, OMEGA_E),
+            Vec3::<SimpleEci>::new(0.0, 0.0, ERA_RATE),
         );
         let r_km = 6378.137;
         let r = Vec3::<SimpleEci>::new(r_km, 0.0, 0.0);
-        let v = Vec3::<SimpleEci>::new(0.0, OMEGA_E * r_km, 0.0); // ω × r
+        let v = Vec3::<SimpleEci>::new(0.0, ERA_RATE * r_km, 0.0); // ω × r
         let v_ecef = ft.transform_velocity(&r, &v);
         assert!(
             v_ecef.inner().norm() < 1e-12,
@@ -1026,13 +1028,13 @@ mod tests {
         let r = Vec3::<SimpleEci>::new(7000.0, -1500.0, 800.0);
         let ft = FrameTransform::new(
             Rotation::<SimpleEci, SimpleEcef>::from_era(era),
-            Vec3::<SimpleEci>::new(0.0, 0.0, OMEGA_E),
+            Vec3::<SimpleEci>::new(0.0, 0.0, ERA_RATE),
         );
         let v_analytic = ft.transform_velocity(&r, &Vec3::<SimpleEci>::zeros());
 
         let dt = 1.0e-3;
         let p0 = Rotation::<SimpleEci, SimpleEcef>::from_era(era).transform(&r);
-        let p1 = Rotation::<SimpleEci, SimpleEcef>::from_era(era + OMEGA_E * dt).transform(&r);
+        let p1 = Rotation::<SimpleEci, SimpleEcef>::from_era(era + ERA_RATE * dt).transform(&r);
         let v_fd = (p1.inner() - p0.inner()) / dt;
         assert!(
             (v_analytic.inner() - v_fd).norm() < 1e-6,
