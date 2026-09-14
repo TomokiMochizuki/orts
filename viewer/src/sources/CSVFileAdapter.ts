@@ -180,6 +180,7 @@ export class CSVFileAdapter implements SourceAdapter {
             this.file.name,
             this.estimatedDt ?? CSVFileAdapter.DEFAULT_DT,
             this.centralBody,
+            msg.torqueModels,
           );
           this.onEvent(id, { kind: "info", info });
           this.infoEmitted = true;

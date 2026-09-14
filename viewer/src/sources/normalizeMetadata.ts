@@ -22,6 +22,10 @@ export function csvMetadataToSimInfo(
   fileName: string,
   dt: number,
   centralBody: CentralBody,
+  /** Models whose torque the file carries, per satellite id. A CSV has no
+   * acceleration columns, so these are reported here rather than as
+   * `perturbations`, which would turn on acceleration charts with no values. */
+  torqueModels?: Record<string, string[]>,
 ): SimInfo {
   const satellites =
     metadata.satellites && metadata.satellites.length > 0
@@ -53,6 +57,7 @@ export function csvMetadataToSimInfo(
     central_body_radius: centralBody.bodyRadius,
     epoch_jd: metadata.epochJd,
     satellites,
+    torqueModels,
   };
 }
 

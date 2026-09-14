@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { attitudeWasRefused, sampleAttitude } from "../displayFrame.js";
-import { type RrdRowIn, rowToPoint, torqueModelsOf } from "./rrdParseLogic.js";
+import { torqueModelsOf } from "../orbit.js";
+import { type RrdRowIn, rowToPoint } from "./rrdParseLogic.js";
 
 function row(overrides: Partial<RrdRowIn> = {}): RrdRowIn {
   return {

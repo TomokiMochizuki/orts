@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { TORQUE_AXES, TORQUE_CHART_MODELS } from "./chartMetrics.js";
 import { sampleAttitude } from "./displayFrame.js";
 
 /**
@@ -261,4 +262,33 @@ export function lerpPoint(a: OrbitPoint, b: OrbitPoint, frac: number): OrbitPoin
   }
 
   return result;
+}
+
+/** Models whose whole torque triple appears in these points, per entity.
+ *
+ * A recording's columns are the union over its satellites, so the presence of
+ * a column says nothing about a given satellite: what counts is a triple
+ * actually decoded for it. A model reporting `[0, 0, 0]` is a model that was
+ * there, and is counted.
+ */
+export function torqueModelsOf(
+  points: readonly OrbitPoint[],
+  into: Map<string, Set<string>> = new Map(),
+): Map<string, Set<string>> {
+  for (const point of points) {
+    const entity = point.entityPath ?? "default";
+    for (const model of TORQUE_CHART_MODELS) {
+      const complete = TORQUE_AXES.every(
+        (axis) => torqueComponent(point, `torque_${model}_${axis}`) !== undefined,
+      );
+      if (!complete) continue;
+      let models = into.get(entity);
+      if (!models) {
+        models = new Set();
+        into.set(entity, models);
+      }
+      models.add(model);
+    }
+  }
+  return into;
 }

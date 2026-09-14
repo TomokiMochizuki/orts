@@ -1181,6 +1181,17 @@ section is subdivided by package.
   replacing the hand-written wire types and adding the `satellite_added` variant. ([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- Opening a CSV reads its columns by the header it carries, so the per-model
+  torque and the attitude reach the viewer. The columns were read by position
+  and stopped at `nu`, and `orts run` writes the angular velocity, the torques
+  and the quaternion after it, so all of them were dropped. An empty cell —
+  what the writer leaves for a satellite that has none of a model, since the
+  columns are the union over the fleet — stays unset rather than becoming the
+  0 that `Number("")` gives, which would read as a torque measured to be zero.
+  A file with no header is still read by position. Measured against a CSV of a
+  tilted `diag(10, 40, 45)` at 400 km: 6.720e-5 N·m of gravity-gradient
+  torque, the same value `.rrd` and the live wire report.
+  ([#477](https://github.com/sksat/orts/pull/477))
 - Opening an `.rrd` that carries per-model torque shows its torque charts. The
   recording holds the values (`orts run` writes them) and the decoder dropped
   them, so the charts appeared for a live run and not for the same run replayed
