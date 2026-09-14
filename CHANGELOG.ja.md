@@ -513,7 +513,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 #### Fixed
 - `mode = "controlled"` が、地表に衝突した衛星や大気圏に入った衛星を止めていなかった。
   orbit-only と spacecraft は `body_event_checker` を `IndependentGroup` に渡すが、controlled の
-  ループは述語なしで積分していた(adaptive 側は `Continue` 固定の closure、`Rk4` は hook のない
+  ループは終了判定なしで積分していた(adaptive 側は `Continue` 固定の closure、`Rk4` は hook のない
   `try_integrate`)。地表以下の衛星が伝播され続け、`serve` の終了判定も構造上 `false` を返していた。
   3 つの integrator をすべて `stepper().advance_to(..., event_check)` に通した。目標時刻に達したら
   その時刻を、event なら stepper が止まった状態と時刻を commit し、積分エラーでは従来どおり
