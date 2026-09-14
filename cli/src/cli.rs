@@ -234,7 +234,9 @@ pub struct SimArgs {
     pub space_weather: Option<String>,
 
     /// Total simulation duration in seconds. Omit to cover one orbit
-    /// (`orts run`); `orts serve` streams without end either way.
+    /// (`orts run`): each satellite's own, or — with `mode = "controlled"`,
+    /// where the fleet shares one clock — the longest in the fleet.
+    /// `orts serve` streams without end either way.
     #[arg(long)]
     pub duration: Option<f64>,
 

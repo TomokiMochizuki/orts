@@ -154,8 +154,8 @@ fn is_stdout_sentinel(s: &str) -> bool {
 ///
 /// Used by the orbit-only and spacecraft paths, which end each satellite
 /// separately. `run_controlled_simulation` steps the whole fleet on one clock,
-/// so it takes `duration` or the *first* satellite's period for all of them —
-/// a pre-existing difference between the modes, left as it is here.
+/// so it takes `duration` or the longest period in the fleet for all of them —
+/// see [`fleet_duration`].
 fn end_time_of(params: &SimParams, sat: &crate::satellite::SatelliteSpec) -> f64 {
     params.duration.unwrap_or(sat.period)
 }
@@ -1147,19 +1147,43 @@ fn monitors_want(span_end_t: f64, fleet_event_t: f64, duration: f64, stopped_any
     span_end_t >= fleet_event_t || span_end_t >= duration || stopped_any
 }
 
+/// How long a controlled run lasts: `--duration` if given, else one orbit of
+/// the slowest satellite.
+///
+/// The fleet shares one clock, so "one orbit" is one number: the longest period
+/// is the smallest horizon that gives every satellite at least one initial
+/// orbital period. Taking the first satellite's made the run's length depend on
+/// the order the config listed them in. The orbit-only and spacecraft paths end
+/// each satellite at its own period instead, which is what a per-satellite
+/// clock buys them.
+///
+/// The satellites of a short orbit keep flying — and controlling, burning and
+/// recording — until the longest one is done, which is what a shared horizon
+/// means. `--duration` is there for a run that should stop earlier.
+///
+/// A period that is not a positive finite number carries no orbit to cover and
+/// is skipped; with nothing usable left the answer is the historical 3600 s.
+/// The CLI does not reach that case — an empty fleet is routed to orbit-only,
+/// and a non-finite orbit is refused when the config is read — so it is a
+/// fallback, not a documented default.
+fn fleet_duration(explicit: Option<f64>, periods: impl Iterator<Item = f64>) -> f64 {
+    if let Some(duration) = explicit {
+        return duration;
+    }
+    // `f64::max` answers the other argument when one is NaN, so the fold picks
+    // the largest usable period and stays NaN only when there is none.
+    let longest = periods
+        .filter(|p| p.is_finite() && *p > 0.0)
+        .fold(f64::NAN, f64::max);
+    if longest.is_finite() { longest } else { 3600.0 }
+}
+
 /// 制御付きシミュレーション（プラグインコントローラ + RW + センサ）。
 fn run_controlled_simulation(params: &SimParams, sim: &SimArgs) -> Result<Recording, CmdError> {
     use crate::sim::controlled::{ControlledBuildContext, build_controlled_satellite};
     let _ = sim; // Plugin backend is now stored in SimParams directly.
 
-    let duration = params.duration.unwrap_or_else(|| {
-        // フォールバック: 最初の衛星の軌道周期。
-        params
-            .satellites
-            .first()
-            .map(|s| s.period)
-            .unwrap_or(3600.0)
-    });
+    let duration = fleet_duration(params.duration, params.satellites.iter().map(|s| s.period));
 
     let mut rec = Recording::new();
     let body_path = EntityPath::parse(&format!("/world/{}", params.body.properties().name));
@@ -2124,6 +2148,41 @@ mod tests {
 
     fn sample_times(interval: f64, duration: f64, tick_period: f64) -> Vec<f64> {
         walk_schedule(interval, duration, tick_period).taken
+    }
+
+    #[test]
+    fn a_controlled_fleet_runs_for_its_longest_orbit() {
+        // 5500 s and 7000 s in either order: the run has to be 7000 s, or its
+        // length depends on how the config was written.
+        assert_eq!(fleet_duration(None, [5500.0, 7000.0].into_iter()), 7000.0);
+        assert_eq!(fleet_duration(None, [7000.0, 5500.0].into_iter()), 7000.0);
+    }
+
+    #[test]
+    fn an_explicit_duration_wins_over_every_period() {
+        assert_eq!(
+            fleet_duration(Some(60.0), [5500.0, 7000.0].into_iter()),
+            60.0
+        );
+        // Even with no satellite to take a period from.
+        assert_eq!(fleet_duration(Some(60.0), std::iter::empty()), 60.0);
+    }
+
+    #[test]
+    fn a_fleet_with_no_usable_period_falls_back_to_an_hour() {
+        assert_eq!(fleet_duration(None, std::iter::empty()), 3600.0);
+        for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                fleet_duration(None, [bad].into_iter()),
+                3600.0,
+                "{bad} carries no orbit to cover"
+            );
+        }
+        // A usable period among unusable ones is still the answer.
+        assert_eq!(
+            fleet_duration(None, [f64::NAN, 5500.0, f64::INFINITY].into_iter()),
+            5500.0
+        );
     }
 
     #[test]

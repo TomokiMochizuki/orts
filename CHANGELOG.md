@@ -646,6 +646,17 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- With `--duration` omitted, a `mode = "controlled"` run lasted one orbit of
+  whichever satellite the config listed first, so a fleet of a 5500 s and a
+  7000 s orbit ran for 5500 s or 7000 s depending on the order they were
+  written in. The fleet shares one clock, so "one orbit" is now the longest
+  period in it — the only choice that gives every satellite its orbit. The
+  orbit-only and spacecraft paths still end each satellite at its own period,
+  which one clock cannot do. A period that is not a positive finite number
+  carries no orbit to cover and is skipped, leaving the historical 3600 s — a
+  fallback the CLI does not reach, since an empty fleet is routed to orbit-only
+  and a non-finite orbit is refused when the config is read.
+  ([#442](https://github.com/sksat/orts/issues/442))
 - `mode = "controlled"` ignored `output_interval` whenever the controller was
   slower than it: a span ended only at a controller tick or at `duration`, so
   with a 1 s controller period an `output_interval` of 0.1 still sampled once a
