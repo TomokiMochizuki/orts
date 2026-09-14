@@ -934,6 +934,12 @@ section is subdivided by package.
   reported the range `(-inf, 60000)` and answered a query inside it with
   `Ok(NaN)` rather than an error. A lone `NaN` entry had no pair to compare
   against at all. Reported as `EopLookupError::NonFiniteMjd`. ([#463](https://github.com/sksat/orts/pull/463))
+- Every finals2000A column refuses `NaN`, `inf` and `-inf`. `f64::from_str`
+  accepts all three and IERS publishes none of them, so the spelling went into
+  a lookup answer: `lod_A = NaN` came back as `Ok(NaN)`, and a Bulletin B `NaN`
+  won over a good Bulletin A reading, since the B column is preferred when
+  present. A required column reached the answer the same way once the Bulletin B
+  block was absent. ([#463](https://github.com/sksat/orts/pull/463))
 - **BREAKING**: `EopParseError` and `EopLookupError` are `#[non_exhaustive]`, so
   an exhaustive `match` on either needs a wildcard arm. Both gained a variant
   here and the EOP work still open will add more. ([#463](https://github.com/sksat/orts/pull/463))

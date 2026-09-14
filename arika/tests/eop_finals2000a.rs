@@ -623,3 +623,45 @@ fn a_non_finite_mjd_is_refused_wherever_it_sits() {
         );
     }
 }
+
+/// `f64::from_str` accepts `NaN`, `inf` and `-inf`, and IERS publishes none of
+/// them, so a column spelling one is damage. Letting it through put the value
+/// straight into a lookup answer: `lod_A = NaN` came back as `Ok(NaN)`, and a
+/// Bulletin B `NaN` won over a good Bulletin A reading, since the B column is
+/// preferred when present. A required column reached the answer the same way
+/// once the Bulletin B block was absent.
+#[test]
+fn a_non_finite_spelling_is_refused_in_every_column() {
+    let first = SAMPLE.lines().next().expect("fixture has rows");
+
+    // Right-align `text` inside the 1-indexed column range [start, end).
+    let put = |start: usize, end: usize, text: &str| -> String {
+        let mut row: Vec<char> = first.chars().collect();
+        let width = end - start;
+        let padded = format!("{text:>width$}");
+        for (k, c) in padded.chars().enumerate().take(width) {
+            row[start + k] = c;
+        }
+        let row: String = row.into_iter().collect();
+        SAMPLE.replacen(first, &row, 1)
+    };
+
+    for (name, start, end) in [
+        ("xp_A", 17, 27),
+        ("dut1_A", 58, 68),
+        ("lod_A", 78, 86),
+        ("dX_A", 97, 106),
+        ("xp_B", 134, 144),
+    ] {
+        for spelling in ["NaN", "inf", "-inf"] {
+            match EopTable::from_finals2000a(&put(start, end, spelling)) {
+                Err(arika::earth::eop::EopParseError::InvalidNumber { column, value, .. }) => {
+                    assert_eq!(column, name, "{name} = {spelling}");
+                    assert_eq!(value, spelling, "{name} = {spelling}");
+                }
+                Err(other) => panic!("{name} = {spelling}: unexpected error {other:?}"),
+                Ok(_) => panic!("{name} = {spelling} built a table"),
+            }
+        }
+    }
+}

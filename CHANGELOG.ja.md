@@ -793,6 +793,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `-inf` が有限の MJD の前に通り、テーブルは範囲 `(-inf, 60000)` を報告したうえで、その範囲内の
   照会に対しエラーではなく `Ok(NaN)` を返していた。単独の `NaN` entry は比較する相手が無いので
   そもそも検査されなかった。`EopLookupError::NonFiniteMjd` で報告する。([#463](https://github.com/sksat/orts/pull/463))
+- finals2000A の全列が `NaN` / `inf` / `-inf` を拒否するようになった。`f64::from_str` は
+  3 つとも受理し、IERS はいずれも公開しないので、その綴りがそのまま照会の答えに入っていた。
+  `lod_A = NaN` は `Ok(NaN)` として返り、Bulletin B の `NaN` は有効な Bulletin A の値に
+  優先する (B 列があるときは B を採るため)。Bulletin B の一群が無い行では、必須列も同じ経路で
+  答えに届いていた。([#463](https://github.com/sksat/orts/pull/463))
 - **BREAKING**: `EopParseError` と `EopLookupError` が `#[non_exhaustive]` になった。網羅的な
   `match` には wildcard arm が必要である。今回どちらも variant が増え、未着手の EOP の作業でも
   さらに増える。([#463](https://github.com/sksat/orts/pull/463))

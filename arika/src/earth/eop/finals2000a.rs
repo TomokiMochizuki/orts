@@ -143,14 +143,36 @@ fn parse_col(
     line_num: usize,
 ) -> Result<f64, EopParseError> {
     let end = end.min(line.len());
-    let s = &line[start..end];
-    s.trim()
-        .parse::<f64>()
-        .map_err(|_| EopParseError::InvalidNumber {
+    let s = line[start..end].trim();
+    let value = s.parse::<f64>().map_err(|_| EopParseError::InvalidNumber {
+        line: line_num,
+        column,
+        value: s.to_string(),
+    })?;
+    finite(value, column, line_num, s)
+}
+
+/// Refuse a parsed value that is not finite.
+///
+/// `f64::from_str` accepts `NaN`, `inf` and `-inf`, and IERS publishes none of
+/// them: a column spelling one of those is damage, and letting it through put
+/// the value straight into a lookup answer. A Bulletin B `NaN` also wins over
+/// a good Bulletin A reading, since the B column is preferred when present.
+fn finite(
+    value: f64,
+    column: &'static str,
+    line_num: usize,
+    text: &str,
+) -> Result<f64, EopParseError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(EopParseError::InvalidNumber {
             line: line_num,
             column,
-            value: s.trim().to_string(),
+            value: text.to_string(),
         })
+    }
 }
 
 /// Parse an optional fixed-column field: `None` where the column is blank or
@@ -161,7 +183,8 @@ fn parse_col(
 /// answer with the model alone. A column holding `0.3O0` means the row is
 /// corrupt, and reading it as "no value" turned that into the same
 /// model-only answer — the required columns have always been an error, and
-/// these now agree.
+/// these now agree. `NaN`, `inf` and `-inf` are refused as well: they parse,
+/// and IERS publishes none of them.
 fn parse_col_opt(
     line: &str,
     start: usize,
@@ -180,11 +203,10 @@ fn parse_col_opt(
     if s.is_empty() {
         return Ok(None);
     }
-    s.parse::<f64>()
-        .map(Some)
-        .map_err(|_| EopParseError::InvalidNumber {
-            line: line_num,
-            column,
-            value: s.to_string(),
-        })
+    let value = s.parse::<f64>().map_err(|_| EopParseError::InvalidNumber {
+        line: line_num,
+        column,
+        value: s.to_string(),
+    })?;
+    finite(value, column, line_num, s).map(Some)
 }
