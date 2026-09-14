@@ -56,7 +56,8 @@ pub struct ControlledBuildContext<'a> {
 ///
 /// `t` is where the condition was detected, which is one of two places: the
 /// start of the span, when the state handed to [`advance_controlled`] already
-/// satisfies it, or the end of the step that first landed past the surface.
+/// satisfies it, or the end of the step that first landed past the boundary
+/// (the surface, or the top of the atmosphere where the body has one).
 /// Neither is the crossing itself — the same meaning the event checker has in
 /// [`orts::group::IndependentGroup`].
 #[derive(Debug, Clone)]
