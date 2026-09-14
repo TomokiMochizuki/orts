@@ -143,9 +143,9 @@ export class RrdFileAdapter implements SourceAdapter {
   private pendingMetadata: import("../wasm/rrdWasmInit.js").RrdMetadata | null = null;
   private pendingEntityPaths = new Set<string>();
   private infoEmitted = false;
-  /** Last seen timestamp per entity, persisted across chunks for dt estimation. */
   /** Models whose torque this recording carries, per entity. */
   private torqueModels = new Map<string, Set<string>>();
+  /** Last seen timestamp per entity, persisted across chunks for dt estimation. */
   private lastTByEntity = new Map<string, number>();
 
   /**
