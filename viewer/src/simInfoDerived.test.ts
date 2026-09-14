@@ -31,7 +31,48 @@ describe("deriveSimInfo", () => {
       epochJd: undefined,
       satelliteNames: undefined,
       activePerturbations: [],
+      activeTorqueModels: [],
     });
+  });
+
+  // A live run evaluates every model it names, so its torques are available
+  // too. A file source reports the torques it decoded separately, because it
+  // has no accelerations to go with them — reporting them as perturbations
+  // would turn on acceleration charts whose values do not exist.
+  it("takes torque models from perturbations and from the file's own list", () => {
+    const live = deriveSimInfo(
+      simInfo({
+        satellites: [
+          {
+            id: "sat-a",
+            name: "sat-a",
+            altitude: 400,
+            period: 5500,
+            perturbations: ["gravity", "panel_srp"],
+            shape: null,
+          },
+        ],
+      }),
+    );
+    expect(live.activeTorqueModels).toEqual(["gravity", "panel_srp"]);
+
+    const fromFile = deriveSimInfo({
+      ...simInfo({
+        satellites: [
+          {
+            id: "sat-a",
+            name: "sat-a",
+            altitude: 400,
+            period: 5500,
+            perturbations: [],
+            shape: null,
+          },
+        ],
+      }),
+      torqueModels: { "sat-a": ["panel_drag"] },
+    });
+    expect(fromFile.activeTorqueModels).toEqual(["panel_drag"]);
+    expect(fromFile.activePerturbations).toEqual([]);
   });
 
   it("maps each satellite id to its name (null names preserved)", () => {

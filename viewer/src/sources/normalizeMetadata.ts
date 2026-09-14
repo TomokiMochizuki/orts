@@ -70,6 +70,8 @@ export function rrdMetadataToSimInfo(
   dt: number,
   entityPaths: string[],
   centralBody: CentralBody,
+  /** Models whose torque was decoded, per entity — see `torqueModelsOf`. */
+  torqueModels?: ReadonlyMap<string, ReadonlySet<string>>,
 ): SimInfo {
   const satellites = entityPaths.map((path) => {
     // Extract name from entity path (last segment after /sat/)
@@ -80,6 +82,8 @@ export function rrdMetadataToSimInfo(
       name,
       altitude: metadata.altitude ?? 0,
       period: metadata.period ?? 0,
+      // A recording has no acceleration columns, so it reports no models
+      // here: the torques it does carry are reported as such below.
       perturbations: [] as string[],
       shape: null,
     };
@@ -106,5 +110,9 @@ export function rrdMetadataToSimInfo(
     central_body_radius: centralBody.bodyRadius,
     epoch_jd: metadata.epoch_jd ?? null,
     satellites,
+    // What this recording can chart a torque for, per satellite.
+    torqueModels: torqueModels
+      ? Object.fromEntries([...torqueModels].map(([id, models]) => [id, [...models]]))
+      : undefined,
   };
 }

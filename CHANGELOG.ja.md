@@ -1004,6 +1004,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   wire 型を置き換え、`satellite_added` variant を追加。([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- モデルごとのトルクを持つ `.rrd` を開いたときに、そのトルクチャートが出るようにした。
+  値は記録に入っている (`orts run` が書く) が decoder が落としていたため、live 実行では
+  チャートが出るのに同じ実行をファイルから再生すると出なかった。モデルが「ある」と見なすのは
+  その衛星について完全な triple が decode されたときで、fleet の記録（列は衛星全体の和集合）で
+  モデルを持たない衛星に出ることはない。400 km で `diag(10, 40, 45)` を傾けた記録で実測: チャートは
+  gravity-gradient トルク 6.720e-5 N·m を持ち、同じ構成を live wire で測った値と一致する。
+  ([#476](https://github.com/sksat/orts/pull/476))
 - chunk 単位のファイル読み込みが終わった直後に届いたサンプルが二重に数えられていた。
   読み込みは各衛星の ingest buffer に trail の配列そのものを置換データとして渡すが、
   buffer はその参照を保持し、以後の push は別に queue され、両者を連結して返す。
@@ -1112,6 +1119,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   root-relative パスでは解決できないことへの対処。([#171](https://github.com/sksat/orts/pull/171))
 
 ### `rrd-wasm` (Rust, crates.io)
+
+#### Added
+- decoder がモデルごとの body torque (`<model>.torque_body_{x,y,z}_Nm`) を、
+  viewer がチャートにするモデルについて 1 モデル 1 triple で返すようにした。triple の一部しか
+  記録されていない場合は、姿勢が不完全なときと同じく報告しない（欠けた成分は作れない）。
+  トルクの列は曖昧行の判定にも入れたので、ある時刻に 1 軸の値が 2 つある記録で列をまたいで
+  組み合わせることはない。
+  ([#476](https://github.com/sksat/orts/pull/476))
 
 #### Fixed
 - scalar 列を、列内の値の位置ではなく recording 自身の時刻 index で結合するように

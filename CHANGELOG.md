@@ -1181,6 +1181,16 @@ section is subdivided by package.
   replacing the hand-written wire types and adding the `satellite_added` variant. ([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- Opening an `.rrd` that carries per-model torque shows its torque charts. The
+  recording holds the values (`orts run` writes them) and the decoder dropped
+  them, so the charts appeared for a live run and not for the same run replayed
+  from a file. A model counts as present where a whole torque triple was
+  decoded for that satellite, so a fleet recording — whose columns are the
+  union over its satellites — does not report a model to a satellite that has
+  none. Measured against a recording of a tilted `diag(10, 40, 45)` at 400 km:
+  the chart holds 6.720e-5 N·m of gravity-gradient torque, as the live wire
+  reports for the same configuration.
+  ([#476](https://github.com/sksat/orts/pull/476))
 - A sample arriving just after a chunked file load finished was counted twice.
   The load hands each satellite's ingest buffer the trail's own array as the
   replacement dataset, and that buffer keeps the reference while later pushes
@@ -1305,6 +1315,15 @@ section is subdivided by package.
   `blob:` URL against which a root-relative path cannot resolve. ([#171](https://github.com/sksat/orts/pull/171))
 
 ### `rrd-wasm` (Rust, crates.io)
+
+#### Added
+- The decoder reports each model's body torque (`<model>.torque_body_{x,y,z}_Nm`)
+  as one triple per model, for the models the viewer charts. A recording that
+  logged only part of a triple reports none of it, as an incomplete attitude
+  does — the missing component cannot be invented — and the torque columns join
+  the ambiguity check, so a moment holding two values of one axis is not paired
+  across columns.
+  ([#476](https://github.com/sksat/orts/pull/476))
 
 #### Fixed
 - Scalar columns are joined on the recording's own time index rather than on a

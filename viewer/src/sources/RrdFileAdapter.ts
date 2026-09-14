@@ -12,7 +12,7 @@ import type { BodyCatalog } from "./bodyCatalog.js";
 import { type CentralBody, describeCentralBodyError, resolveCentralBody } from "./centralBody.js";
 import { rrdMetadataToSimInfo } from "./normalizeMetadata.js";
 import { ORBIT_DERIVED_STRIDE, packStates, toOrbitPoints } from "./rrdOrbitDerived.js";
-import type { RrdPointOut, RrdWorkerMessage } from "./rrdParseLogic.js";
+import { type RrdPointOut, type RrdWorkerMessage, torqueModelsOf } from "./rrdParseLogic.js";
 import type { SourceAdapter, SourceEventHandler, SourceId } from "./types.js";
 
 export class RrdFileAdapter implements SourceAdapter {
@@ -143,6 +143,8 @@ export class RrdFileAdapter implements SourceAdapter {
   private pendingMetadata: import("../wasm/rrdWasmInit.js").RrdMetadata | null = null;
   private pendingEntityPaths = new Set<string>();
   private infoEmitted = false;
+  /** Models whose torque this recording carries, per entity. */
+  private torqueModels = new Map<string, Set<string>>();
   /** Last seen timestamp per entity, persisted across chunks for dt estimation. */
   private lastTByEntity = new Map<string, number>();
 
@@ -244,6 +246,9 @@ export class RrdFileAdapter implements SourceAdapter {
         // Convert and emit points as history-chunk (info emitted later on done)
         const orbitPoints = this.deriveChunk(msg.points);
         if (orbitPoints == null) return;
+        // Accumulated across chunks, because the info that carries it goes out
+        // when the last one lands.
+        torqueModelsOf(orbitPoints, this.torqueModels);
         this.onEvent(id, {
           kind: "history-chunk",
           points: orbitPoints,
@@ -259,6 +264,7 @@ export class RrdFileAdapter implements SourceAdapter {
               this.estimatedDt,
               [...this.pendingEntityPaths],
               this.centralBody,
+              this.torqueModels,
             );
             this.onEvent(id, { kind: "info", info });
             this.infoEmitted = true;

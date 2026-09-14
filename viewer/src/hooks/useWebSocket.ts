@@ -40,6 +40,16 @@ export interface SimInfo {
   epoch_jd: number | null;
   /** List of satellites in the simulation. */
   satellites: SatelliteInfo[];
+  /**
+   * Models whose torque this source carries, per satellite id.
+   *
+   * A live run evaluates every model it reports in `perturbations`, so its
+   * torques and its accelerations are both available. A file source knows
+   * only what it decoded: a recording carries torque columns and no
+   * acceleration columns, and saying "these models are active" would turn on
+   * acceleration charts whose values do not exist.
+   */
+  torqueModels?: Record<string, string[]>;
 }
 
 /**

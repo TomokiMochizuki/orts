@@ -18,6 +18,8 @@ export interface DerivedSimInfo {
   satelliteNames: Map<string, string | null> | undefined;
   /** De-duplicated union of active perturbation names across all satellites. */
   activePerturbations: string[];
+  /** Models whose torque can be charted, from either source of that fact. */
+  activeTorqueModels: string[];
 }
 
 /** Default central body radius (Earth equatorial radius, km). */
@@ -31,14 +33,25 @@ export function deriveSimInfo(simInfo: SimInfo | null): DerivedSimInfo {
       epochJd: undefined,
       satelliteNames: undefined,
       activePerturbations: [],
+      activeTorqueModels: [],
     };
   }
 
   const satelliteNames = new Map<string, string | null>();
   const perturbations = new Set<string>();
+  // A live run's models are in `perturbations`; a file source reports the
+  // torques it decoded separately, because it has no accelerations to go with
+  // them. Both reach the torque charts.
+  const torqueModels = new Set<string>();
   for (const satellite of simInfo.satellites) {
     satelliteNames.set(satellite.id, satellite.name);
-    for (const p of satellite.perturbations) perturbations.add(p);
+    for (const p of satellite.perturbations) {
+      perturbations.add(p);
+      torqueModels.add(p);
+    }
+    for (const model of simInfo.torqueModels?.[satellite.id] ?? []) {
+      torqueModels.add(model);
+    }
   }
 
   return {
@@ -47,5 +60,6 @@ export function deriveSimInfo(simInfo: SimInfo | null): DerivedSimInfo {
     epochJd: simInfo.epoch_jd ?? undefined,
     satelliteNames,
     activePerturbations: [...perturbations],
+    activeTorqueModels: [...torqueModels],
   };
 }

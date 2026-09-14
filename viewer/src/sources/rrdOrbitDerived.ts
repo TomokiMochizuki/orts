@@ -10,6 +10,7 @@
  * same `KeplerianElements::from_state_vector` the CLI writes into CSV.
  */
 
+import { TORQUE_CHART_METRICS } from "../chartMetrics.js";
 import type { OrbitPoint } from "../orbit.js";
 import type { RrdPointOut } from "./rrdParseLogic.js";
 
@@ -78,6 +79,14 @@ export function toOrbitPoints(
       wx: p.wx,
       wy: p.wy,
       wz: p.wz,
+      // The decoded row's torque columns, which are named as the charts name
+      // them. A row is rebuilt here, so leaving them out drops the values
+      // between the decoder and the chart.
+      ...Object.fromEntries(
+        TORQUE_CHART_METRICS.map((metric) => [metric, p[metric as `torque_${string}`]]).filter(
+          ([, v]) => v !== undefined,
+        ),
+      ),
     };
   });
 }
