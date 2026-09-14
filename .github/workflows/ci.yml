@@ -460,8 +460,16 @@ jobs:
           # alone does not break this step.
           base="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}"
           rm -rf /tmp/wasi-sysroot-extract && mkdir -p /tmp/wasi-sysroot-extract
+          #
+          # The retry separates the two reasons a candidate fails: a 404 means
+          # this release does not use that name and the loop should move on,
+          # while a 5xx means the download is unwell — without it, the GitHub
+          # release outage of 2026-09-14 looked like "neither name exists" and
+          # the step failed on `test -d` instead.
           for name in "wasi-sysroot-${WASI_SDK_VERSION}.0+m" "wasi-sysroot-${WASI_SDK_VERSION}.0"; do
-            if curl -sfL "${base}/${name}.tar.gz" -o /tmp/wasi-sysroot.tar.gz; then
+            if curl -sfL --retry 8 --retry-max-time 300 --retry-all-errors \
+                 --connect-timeout 15 "${base}/${name}.tar.gz" \
+                 -o /tmp/wasi-sysroot.tar.gz; then
               sudo tar xzf /tmp/wasi-sysroot.tar.gz -C /tmp/wasi-sysroot-extract
               inner=$(ls /tmp/wasi-sysroot-extract)
               sudo mv "/tmp/wasi-sysroot-extract/${inner}" /usr/share/wasi-sysroot

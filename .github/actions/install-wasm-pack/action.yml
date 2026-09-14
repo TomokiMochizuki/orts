@@ -17,7 +17,13 @@ runs:
         WP_VERSION=0.13.1
         WP_SHA256=c539d91ccab2591a7e975bcf82c82e1911b03335c80aa83d67ad25ed2ad06539
         url="https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WP_VERSION}/wasm-pack-v${WP_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-        curl -fsSL -o /tmp/wasm-pack.tar.gz "$url"
+        # Same retry as setup-wild, and for the same reason: this is a GitHub
+        # release download, and the 504 window of 2026-09-14 took out every job
+        # that fetched one. curl backs off exponentially and gives up after five
+        # minutes; a 404 still fails on the first try, and the checksum below is
+        # what decides whether the bytes are right.
+        curl -fsSL --retry 8 --retry-max-time 300 --retry-all-errors \
+          --connect-timeout 15 -o /tmp/wasm-pack.tar.gz "$url"
         echo "${WP_SHA256}  /tmp/wasm-pack.tar.gz" | sha256sum -c -
         dest="${CARGO_HOME:-$HOME/.cargo}/bin"
         mkdir -p "$dest"
