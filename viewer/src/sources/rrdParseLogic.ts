@@ -42,7 +42,13 @@ export interface RrdPointOut {
   [torqueColumn: `torque_${string}`]: number | undefined;
 }
 
-/** One decoded row as rrd-wasm hands it over. */
+/** One decoded row as `rowToPoint` accepts it.
+ *
+ * Deliberately more permissive than `RrdRow`, the wasm boundary's contract:
+ * the optional members there are present-but-null, and this type also accepts
+ * them missing, so a row from a test or from a decoder that predates a field
+ * can be converted without being widened first.
+ */
 export interface RrdRowIn {
   t: number;
   x: number;

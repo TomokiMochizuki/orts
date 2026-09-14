@@ -99,7 +99,10 @@ test("an .rrd carrying per-model torque shows its torque charts", async ({ page 
   );
   const values = await measured.jsonValue();
   console.log("torque from the recording:", JSON.stringify(values));
-  expect(values.max).toBeGreaterThan(1e-5);
+  // The run is deterministic, so the value is pinned rather than bounded: a
+  // scaling or unit regression would satisfy "greater than zero".
+  expect(values.max).toBeCloseTo(6.72e-5, 6);
+  expect(values.samples).toBe(61);
 
   // A recording carries no acceleration columns, and the chart rows fill a
   // missing acceleration with zero, so an acceleration chart here would draw a

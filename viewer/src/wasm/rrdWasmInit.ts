@@ -25,6 +25,12 @@ export interface RrdRow {
   entity_path: string | null;
   quaternion: [number, number, number, number] | null;
   angular_velocity: [number, number, number] | null;
+  /** Body-frame disturbance torque per model [N·m], for the models the charts
+   * know. One triple or nothing: the decoder reports a torque only where all
+   * three axes were logged. */
+  torque_gravity_gradient: [number, number, number] | null;
+  torque_panel_srp: [number, number, number] | null;
+  torque_panel_drag: [number, number, number] | null;
 }
 
 export interface ParsedRrd {
