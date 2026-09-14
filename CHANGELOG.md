@@ -600,6 +600,13 @@ section is subdivided by package.
   under RK4 when `output_interval` equals `dt`. ([#466](https://github.com/sksat/orts/pull/466))
 
 #### Fixed
+- `orts serve` reports the models a satellite added at runtime carries.
+  `satellite_added` announced an empty `perturbations` list, and the retained
+  Info — what a client connecting after the add is sent — still held the
+  snapshot built at startup, so the added satellite was missing from it
+  entirely. Both add paths now read the names off the system they just built,
+  and record the satellite in that snapshot.
+  ([#474](https://github.com/sksat/orts/pull/474))
 - Every satellite's CSV rows carry the columns the header names. The header was
   built from the first satellite's components and each satellite's rows from its
   own, so a fleet whose satellites differ wrote rows of different widths: two
@@ -1174,6 +1181,11 @@ section is subdivided by package.
   replacing the hand-written wire types and adding the `satellite_added` variant. ([#95](https://github.com/sksat/orts/pull/95))
 
 #### Fixed
+- A satellite added to a running simulation brings its own charts. The
+  `satellite_added` announcement reached the WebSocket hook and stopped there,
+  so the added satellite never entered the Info snapshot the chart-visibility
+  list is built from — its accelerations and torques had no chart of their own.
+  ([#474](https://github.com/sksat/orts/pull/474))
 - A source's central body constants are resolved from the body it names, or the
   source is refused. `mu` and the radius used to fall back to Earth's on their
   own, so a recording around Mars carrying neither was read as Mars' `mu` over
