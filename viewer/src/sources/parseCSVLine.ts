@@ -163,27 +163,52 @@ function cell(cells: string[], index: number | undefined): number | undefined {
 export function parseDataLineWithColumns(line: string, columns: CSVColumns): OrbitPoint | null {
   const cells = line.split(",").map((s) => s.trim());
 
-  const point: Record<string, number | string | undefined> = {};
+  const read: Record<string, number | string | undefined> = {};
   for (const [field, index] of columns.fields) {
     const value = cell(cells, index);
-    if (value !== undefined) point[field] = value;
+    if (value !== undefined) read[field] = value;
   }
   for (const required of REQUIRED_COLUMNS) {
-    if (point[required] === undefined) return null;
+    if (read[required] === undefined) return null;
   }
   if (columns.satelliteId !== undefined) {
     const id = cells[columns.satelliteId];
-    if (id) point.entityPath = id;
+    if (id) read.entityPath = id;
   }
 
-  // An element the header does not name at all is read as zero, as the
-  // positional parsing did for a short line. One the header names but the row
-  // leaves empty stays unset: filling it would state a circular orbit for a
-  // row that recorded nothing.
-  for (const optional of ["a", "e", "inc", "raan", "omega", "nu"]) {
-    if (!columns.fields.has(optional)) point[optional] = 0;
-  }
-  return point as unknown as OrbitPoint;
+  // `OrbitPoint` declares the six orbital elements as numbers, and its readers
+  // — the DuckDB row, the chart row — use them as such. So an element the
+  // header names but the row leaves empty is NaN, which the charts draw as a
+  // gap, rather than 0, which would state a circular orbit for a row that
+  // recorded nothing. An element the header does not name at all keeps the
+  // zero the positional parsing gave a short line.
+  const element = (name: string): number => {
+    const value = read[name];
+    if (typeof value === "number") return value;
+    return columns.fields.has(name) ? Number.NaN : 0;
+  };
+  const required = (name: string): number => read[name] as number;
+
+  // Named rather than cast: `OrbitPoint` declares the elements as numbers, so
+  // the fields it requires are spelled out here and the optional ones —
+  // attitude, torque — are spread in as they were read.
+  return {
+    ...read,
+    t: required("t"),
+    x: required("x"),
+    y: required("y"),
+    z: required("z"),
+    vx: required("vx"),
+    vy: required("vy"),
+    vz: required("vz"),
+    a: element("a"),
+    e: element("e"),
+    inc: element("inc"),
+    raan: element("raan"),
+    omega: element("omega"),
+    nu: element("nu"),
+    entityPath: typeof read.entityPath === "string" ? read.entityPath : undefined,
+  } as OrbitPoint;
 }
 
 /**

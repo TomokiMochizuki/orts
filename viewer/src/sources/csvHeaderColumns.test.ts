@@ -140,14 +140,30 @@ describe("parseDataLineWithColumns", () => {
     expect(point?.torque_gravity_gradient_z).toBe(Number.NEGATIVE_INFINITY);
   });
 
-  // Filling it would state a circular orbit for a row that recorded nothing.
-  it("leaves an orbital element the header names but the row omits unset", () => {
+  // `OrbitPoint` declares the elements as numbers and its readers use them as
+  // such, so an empty one is NaN — a gap in the chart — rather than 0, which
+  // would state a circular orbit for a row that recorded nothing.
+  it("reads an orbital element the header names but the row omits as NaN", () => {
     const cells = row("sat-a", 10, {}).split(",");
     cells[columns.fields.get("e") as number] = "";
 
     const point = parseDataLineWithColumns(cells.join(","), columns);
 
-    expect(point?.e).toBeUndefined();
+    expect(point?.e).toBeNaN();
+    expect(point?.a).toBe(6778.137);
+  });
+
+  // A header that names no elements at all keeps the zero the positional
+  // parsing gave a short line.
+  it("reads an element the header does not name as zero", () => {
+    const minimal = "# t[s],x[km],y[km],z[km],vx[km/s],vy[km/s],vz[km/s]";
+    const columnsMin = parseHeaderLine(minimal);
+    if (!columnsMin) throw new Error("header");
+
+    const point = parseDataLineWithColumns("0,6778.137,0,0,0,7.6686,0", columnsMin);
+
+    expect(point?.e).toBe(0);
+    expect(point?.nu).toBe(0);
   });
 
   // `"toString" in {...}` is true, and an object lookup would hand back a
