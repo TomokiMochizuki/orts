@@ -343,8 +343,11 @@ pub(crate) const ERA_TURNS_AT_J2000: f64 = 0.7790572732640;
 ///
 /// The canonical SOFA spelling is `1.00273781191135448`; it and the shorter
 /// form below round to the same f64 (`0x3ff00b36cdc9f32b`), and this is the one
-/// that survives a round trip. [`earth::ERA_RATE`](crate::earth::ERA_RATE) is
-/// this value divided by the seconds in a day.
+/// that survives a round trip.
+///
+/// [`earth::ERA_RATE`](crate::earth::ERA_RATE) carries the same number in
+/// rad/s: turns become radians through `2π`, and the day becomes seconds
+/// through `86400`.
 pub(crate) const ERA_TURNS_PER_UT1_DAY: f64 = 1.002_737_811_911_354_6;
 
 /// Earth Rotation Angle (ERA) formula, shared by `Ut1Epoch::era` and the

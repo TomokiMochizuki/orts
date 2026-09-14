@@ -69,8 +69,8 @@ pub const OMEGA: f64 = 7.292_115e-5;
 ///
 /// The derivative of the ERA expression (IAU 2000 Resolution B1.8; IERS
 /// Conventions 2010 Eq. 5.14): `2π × 1.00273781191135448 / 86400`. Built from
-/// the same [`ERA_TURNS_PER_UT1_DAY`](crate::epoch::ERA_TURNS_PER_UT1_DAY) the
-/// angle itself is built from, so the two cannot drift apart.
+/// the same `ERA_TURNS_PER_UT1_DAY` the angle itself is built from — one
+/// crate-internal definition, so the two cannot drift apart.
 ///
 /// **This is the ERA step alone.** The IAU 2006 rotation is `W·R·Q`, and its
 /// full time derivative also carries the precession/nutation and polar-motion
