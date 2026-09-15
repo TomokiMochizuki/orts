@@ -333,11 +333,11 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
     /// resumption from reporting the root it is standing on is
     /// [`RootGuard`](crate::RootGuard), which the same `roots` carries: the step
     /// starting at that root's own time does not report that event again.
-    pub fn advance_to_roots<F, const N: usize>(
+    pub fn advance_to_roots<F>(
         &mut self,
         t_target: f64,
         mut callback: F,
-        roots: &mut RootSet<'_, S::State, N>,
+        roots: &mut RootSet<'_, S::State>,
     ) -> Result<RootOutcome, IntegrationError>
     where
         F: FnMut(f64, &S::State),
@@ -394,10 +394,10 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
             // moves to it: a projection can put a root value out of range that
             // the raw candidate had in range, and a walk that fails must leave
             // the caller on the last state it accepted.
-            let values = roots.check(t_committed, &committed)?;
+            roots.check(t_committed, &committed)?;
             self.state = committed;
             self.t = t_committed;
-            roots.apply(self.t, &values);
+            roots.apply(self.t);
 
             callback(self.t, &self.state);
 
