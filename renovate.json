@@ -76,6 +76,11 @@
       "matchUpdateTypes": ["patch"],
       "automerge": true,
       "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "One lockfile refresh branch per ecosystem, so a break on one side does not hold back the other",
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "additionalBranchPrefix": "{{manager}}-"
     }
   ],
   "lockFileMaintenance": {
