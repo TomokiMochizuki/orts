@@ -45,7 +45,8 @@ pub struct SatelliteSpec {
     /// is wanted, the two combine as `duration.unwrap_or(period)`: with no
     /// `duration`, an orbit-only or spacecraft run covers one orbit of each
     /// satellite. A controlled run steps the fleet on one clock and takes the
-    /// first satellite's period for all of them.
+    /// longest period in it, which is the smallest horizon that covers an orbit
+    /// of every satellite.
     pub period: f64,
     /// Explicit ballistic coefficient Cd*A/(2m) [m²/kg] for drag.
     pub ballistic_coeff: Option<f64>,
