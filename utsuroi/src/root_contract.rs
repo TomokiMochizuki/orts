@@ -856,6 +856,52 @@ fn case_a_root_still_moves_the_step_size<W: Walker<Sys = Ramp> + HasStepSize>(
     );
 }
 
+/// The step size after a root is the one the same step would have left with no
+/// event at all.
+///
+/// `advance_to_roots` documents that the size is grown or shrunk from the
+/// accepted step's error exactly as `advance_to` does. Comparing against a walk
+/// that takes the same first step without an event pins the factor, not only
+/// that something moved.
+fn case_the_step_size_after_a_root_matches_a_walk_without_one<
+    W: Walker<Sys = Ramp> + HasStepSize,
+>(
+    label: &str,
+    mut with_root: W,
+    mut without: W,
+) {
+    let event = AtLevel::rising(0.02);
+    let mut roots =
+        RootSet::new([&event as &dyn RootEvent<State<1, 1>>], SEARCH).expect("valid search");
+    let mut reported = Vec::new();
+    assert!(
+        matches!(
+            with_root
+                .advance(T_END, &mut reported, &mut roots)
+                .expect("the walk succeeds"),
+            RootOutcome::Roots { .. }
+        ),
+        "{label}: the ramp crosses 0.02 in the first step"
+    );
+
+    // One step of the same width, with nothing to find: the target is the end of
+    // that step, so the stepper takes it and stops.
+    let mut empty: RootSet<'_, State<1, 1>, 0> = RootSet::new([], SEARCH).expect("valid search");
+    let mut plain = Vec::new();
+    assert_eq!(
+        without
+            .advance(T0 + DT, &mut plain, &mut empty)
+            .expect("the walk succeeds"),
+        RootOutcome::Reached
+    );
+
+    assert_eq!(
+        with_root.dt(),
+        without.dt(),
+        "{label}: the root-bearing step left the same size as the plain one"
+    );
+}
+
 /// The adaptive steppers' step size, for the case above.
 trait HasStepSize {
     fn dt(&self) -> f64;
@@ -881,6 +927,15 @@ macro_rules! step_size_contract_for {
             #[test]
             fn a_root_still_moves_the_step_size() {
                 case_a_root_still_moves_the_step_size(stringify!($solver), $walker);
+            }
+
+            #[test]
+            fn the_step_size_after_a_root_matches_a_walk_without_one() {
+                case_the_step_size_after_a_root_matches_a_walk_without_one(
+                    stringify!($solver),
+                    $walker,
+                    $walker,
+                );
             }
         }
     };

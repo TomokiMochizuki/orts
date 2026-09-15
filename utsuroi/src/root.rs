@@ -1242,6 +1242,43 @@ mod tests {
         ));
     }
 
+    /// A step whose midpoints name no new instant reports the root at the step's
+    /// end, which is the only time in it the clock can express.
+    ///
+    /// At `t0 = 1e15` the spacing of f64 is `0.125`, so a step of exactly that
+    /// width does advance the clock while its first trial at `0.0625` does not.
+    /// The search stops narrowing there and keeps the end it has. Without that
+    /// stop it would halve its way down to a width the clock cannot take and
+    /// fail instead.
+    #[test]
+    fn a_step_the_clock_can_only_express_whole_reports_its_end() {
+        const T0: f64 = 1e15;
+        const H: f64 = 0.125;
+        assert!(
+            T0 + H > T0,
+            "the premise: the whole step advances the clock"
+        );
+        assert!(
+            T0 + H / 2.0 == T0,
+            "the premise: its first trial names no new instant"
+        );
+
+        let level = Level::at(0.06);
+        let mut set = RootSet::new(
+            [&level as &dyn RootEvent<f64>],
+            RootSearch {
+                t_tolerance: 1e-9,
+                max_iterations: 200,
+            },
+        )
+        .expect("valid");
+        set.begin(T0, &0.0).expect("finite value");
+        match set.scan_step(T0, H, &H, ramp).expect("located") {
+            StepRoots::Found { t, .. } => assert_eq!(t, T0 + H),
+            StepRoots::None => panic!("the ramp crosses 0.06 inside the step"),
+        }
+    }
+
     /// A walk that starts somewhere other than the last root no longer reports
     /// standing on it.
     #[test]
