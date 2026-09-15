@@ -411,7 +411,14 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper<'a, S> {
                 };
                 roots.apply(self.t);
 
-                callback(self.t, &self.state);
+                // A state the walk stopped at a boundary is not the final one:
+                // the caller updates the mode it just crossed into, and corrects
+                // whatever the overshoot took, before anything records it. So the
+                // callback runs for ordinary steps only, and a caller handling a
+                // root reads the state from the stepper.
+                if outcome.is_none() {
+                    callback(self.t, &self.state);
+                }
 
                 // From the error of the step that was accepted, whether or not a
                 // root cut it short: the trials never touch this, and a walk

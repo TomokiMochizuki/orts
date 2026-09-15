@@ -317,9 +317,10 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
     /// event changed sign over it, bisection re-steps from the step's own start
     /// until the bracket is narrower than
     /// [`RootSearch::t_tolerance`](crate::RootSearch::t_tolerance), and the
-    /// state at the boundary is what the stepper commits. The callback is
-    /// called there and nowhere else in the search, so the trial states never
-    /// leave this function.
+    /// state at the boundary is what the stepper commits. Neither the trials
+    /// nor the state a root stopped at reach the callback: a boundary state is
+    /// not final until the caller has handled the root, so it reads that one
+    /// from the stepper.
     ///
     /// Reaching a boundary ends the walk whether or not the event is terminal:
     /// `terminal` in the outcome says what the events asked for, and a caller
@@ -399,7 +400,14 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
             self.t = t_committed;
             roots.apply(self.t);
 
-            callback(self.t, &self.state);
+            // A state the walk stopped at a boundary is not the final one:
+            // the caller updates the mode it just crossed into, and corrects
+            // whatever the overshoot took, before anything records it. So the
+            // callback runs for ordinary steps only, and a caller handling a
+            // root reads the state from the stepper.
+            if outcome.is_none() {
+                callback(self.t, &self.state);
+            }
 
             if let Some(outcome) = outcome {
                 return Ok(outcome);

@@ -480,6 +480,29 @@ fn assert_reported_walk(label: &str, reported: &[(f64, f64)], end_t: f64) {
     }
 }
 
+/// The reported times of a walk that stopped at a root: increasing, and every
+/// one of them before the boundary, which the callback does not see at all. The
+/// state there is the caller's to handle first, so it reads it from the stepper.
+///
+/// A root inside the first step reports nothing, which is why this does not ask
+/// for a state the way `assert_reported_walk` does.
+fn assert_reported_up_to_root(label: &str, reported: &[(f64, f64)], root_t: f64) {
+    for pair in reported.windows(2) {
+        assert!(
+            pair[1].0 > pair[0].0,
+            "{label}: reported times must increase: {:?}",
+            reported.iter().map(|s| s.0).collect::<Vec<_>>()
+        );
+    }
+    for (t, _) in reported {
+        assert!(
+            *t < root_t,
+            "{label}: the boundary at {root_t} is not reported, and neither is \
+             anything past it: {t}"
+        );
+    }
+}
+
 fn case_locates_the_analytic_crossing<W: Walker<Sys = Ramp>>(label: &str, mut walker: W) {
     let event = AtLevel::rising(LEVEL);
     root_set!(roots, SEARCH, &event as &dyn RootEvent<State<1, 1>>);
@@ -513,10 +536,10 @@ fn case_locates_the_analytic_crossing<W: Walker<Sys = Ramp>>(label: &str, mut wa
                 roots.hits().collect::<Vec<_>>()
             );
             assert_eq!(roots.hit_at(0).expect("one hit").event, 0);
+            assert_reported_up_to_root(label, &reported, t);
         }
         RootOutcome::Reached => panic!("{label}: the ramp crosses {LEVEL} before {T_END}"),
     }
-    assert_reported_walk(label, &reported, walker.t());
 }
 
 fn case_a_level_out_of_reach_is_not_a_root<W: Walker<Sys = Ramp>>(label: &str, mut walker: W) {
@@ -722,10 +745,10 @@ fn case_a_crossing_on_the_last_step_is_found<W: Walker<Sys = Ramp>>(label: &str,
                 t < T_END,
                 "{label}: the boundary is before the target, not on it"
             );
+            assert_reported_up_to_root(label, &reported, t);
         }
         RootOutcome::Reached => panic!("{label}: y reaches 4.0 inside the last step"),
     }
-    assert_reported_walk(label, &reported, walker.t());
 }
 
 /// A boundary the fixed grid lands on exactly is reported at that step's end,
@@ -748,10 +771,45 @@ fn case_a_crossing_on_a_grid_time_is_found<W: Walker<Sys = Ramp>>(label: &str, m
                 (t - 2.0).abs() <= SLACK,
                 "{label}: located {t}, analytic crossing is 2.0"
             );
+            assert_reported_up_to_root(label, &reported, t);
         }
         RootOutcome::Reached => panic!("{label}: y reaches 2.0 at t = 2.0"),
     }
-    assert_reported_walk(label, &reported, walker.t());
+}
+
+/// A boundary inside the first step leaves the callback untouched.
+///
+/// `y = 0.02` is crossed at `t = 0.2`, inside the first `0.25` step of every
+/// solver here, so the walk commits one state and it is the boundary's. The
+/// caller reads it from the stepper, which is where a state it still has to
+/// handle belongs.
+fn case_a_root_in_the_first_step_reports_nothing<W: Walker<Sys = Ramp>>(
+    label: &str,
+    mut walker: W,
+) {
+    let event = AtLevel::rising(0.02);
+    root_set!(roots, SEARCH, &event as &dyn RootEvent<State<1, 1>>);
+    let mut reported = Vec::new();
+
+    match walker
+        .advance(T_END, &mut reported, &mut roots)
+        .expect("the walk succeeds")
+    {
+        RootOutcome::Roots { t, .. } => {
+            let analytic = 0.04_f64.sqrt();
+            assert!(
+                (t - analytic).abs() <= SLACK,
+                "{label}: located {t}, analytic crossing is {analytic}"
+            );
+            assert!(
+                reported.is_empty(),
+                "{label}: the only state the walk committed is the boundary's: {:?}",
+                reported.iter().map(|s| s.0).collect::<Vec<_>>()
+            );
+            assert_eq!(walker.t(), t, "{label}: the stepper holds the boundary");
+        }
+        RootOutcome::Reached => panic!("{label}: y reaches 0.02 inside the first step"),
+    }
 }
 
 /// A walk over an empty set steps as it always would and reports nothing found.
@@ -815,9 +873,10 @@ fn case_the_search_does_not_project_its_trials<W: Walker<Sys = Unit>>(label: &st
     );
     assert_eq!(
         spent,
-        reported.len(),
-        "{label}: the projection runs once per state the walk reported, and on nothing \
-         else; reported {:?}",
+        reported.len() + 1,
+        "{label}: the projection runs once per state the walk committed — the reported \
+         steps plus the boundary, which the callback does not see — and on nothing else; \
+         reported {:?}",
         reported.iter().map(|s| s.0).collect::<Vec<_>>()
     );
 }
@@ -1090,6 +1149,11 @@ macro_rules! contract_for {
             #[test]
             fn a_crossing_on_a_grid_time_is_found() {
                 case_a_crossing_on_a_grid_time_is_found(stringify!($solver), $walker);
+            }
+
+            #[test]
+            fn a_root_in_the_first_step_reports_nothing() {
+                case_a_root_in_the_first_step_reports_nothing(stringify!($solver), $walker);
             }
 
             #[test]
