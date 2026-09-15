@@ -400,8 +400,10 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper853<'a, S> {
     /// the step's own start with the same first-stage derivative until the
     /// bracket is narrower than
     /// [`RootSearch::t_tolerance`](crate::RootSearch::t_tolerance), and the
-    /// state at the boundary is what the stepper commits. The callback is
-    /// called there and nowhere else in the search.
+    /// state at the boundary is what the stepper commits. Neither the trials
+    /// nor the state a root stopped at reach the callback, which sees ordinary
+    /// committed steps only: a boundary state is not final until the caller has
+    /// handled the root, so it reads that one from the stepper.
     ///
     /// The trials cannot move the step size: it is grown or shrunk from the
     /// error of the step that was accepted, exactly as in

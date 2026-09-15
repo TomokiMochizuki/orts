@@ -311,7 +311,7 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
     }
 
     /// Advance to `t_target` in steps of the configured `dt`, stopping at the
-    /// first boundary a [`RootEvent`] in `roots` describes.
+    /// first boundary a [`RootEvent`](crate::RootEvent) in `roots` describes.
     ///
     /// Each step is examined on its raw candidate, before the projection: if an
     /// event changed sign over it, bisection re-steps from the step's own start

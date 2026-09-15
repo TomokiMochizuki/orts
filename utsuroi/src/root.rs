@@ -19,10 +19,13 @@
 //! # What a walk with root events guarantees
 //!
 //! The state and time a stepper holds afterwards are the ones at the boundary,
-//! projected, and the callback is called there. States tried during the search
-//! reach neither the callback nor the projection. [`RootSet::hits`] lists every
-//! event that crossed within the final bracket, so a caller that has to break a
-//! tie between two wheels saturating together sees both.
+//! projected. The callback does not see them: a boundary state is not final
+//! until the caller has updated the mode it crossed into, so the caller reads
+//! that state from the stepper and records it when it is done. States tried
+//! during the search reach neither the callback nor the projection.
+//! [`RootSet::hits`] lists every event that crossed within the final bracket,
+//! so a caller that has to break a tie between two wheels saturating together
+//! sees both.
 //!
 //! # What the caller owes
 //!
@@ -59,11 +62,12 @@
 //!
 //! # Storage
 //!
-//! utsuroi does not allocate, so [`RootSet`] carries its own fixed-size
-//! storage: the event count is a const parameter, and the guards and hits live
-//! in the set. The caller holds the set across resumptions, which is what stops
-//! a non-terminal root from being found again while the state sits on its
-//! boundary.
+//! utsuroi does not allocate, so a [`RootSet`] borrows its storage: one
+//! [`RootSlot`] per event, owned by the caller — which is also what lets the
+//! event count be whatever that caller's configuration builds, one per wheel or
+//! per thruster. A slot carries its event's guard, so the caller holds the slots
+//! across resumptions, and that is what stops a non-terminal root from being
+//! found again while the state sits on its boundary.
 
 use crate::IntegrationError;
 
@@ -237,7 +241,7 @@ pub enum RootOutcome {
         /// The time the walk stopped at, which is where the state now is. Every
         /// hit shares it.
         t: f64,
-        /// Width of the bracket the search ended with [s]. The time is
+        /// Width of the bracket the search ended with, in seconds. The time is
         /// uncertain by about this much numerically; how far it is from the
         /// true crossing also depends on the state error and on how flat the
         /// value is there.
@@ -251,9 +255,9 @@ pub enum RootOutcome {
 /// How hard to look for a crossing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RootSearch {
-    /// Bracket width to stop at [s]. The search ends once the interval holding
-    /// the crossing is this narrow, or once halving it no longer changes the
-    /// bracket in f64.
+    /// Bracket width to stop at, in seconds. The search ends once the interval
+    /// holding the crossing is this narrow, or once halving it no longer
+    /// changes the bracket in f64.
     pub t_tolerance: f64,
     /// Cap on bisection iterations. A value that behaves unlike a continuous
     /// function cannot make the search spin: the walk fails with
