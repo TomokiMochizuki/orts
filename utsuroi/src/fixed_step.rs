@@ -327,11 +327,12 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
     /// `roots` are what keep that step from reporting the departure as a new
     /// crossing, so the same set has to be passed back.
     ///
-    /// A value that is already zero at the state the stepper starts from is not
-    /// a root. Detection needs a sign change, and a state sitting exactly on a
-    /// boundary is also what the previous root left behind. The values there are
-    /// read — they are the "before" of the first step — and none of them is
-    /// reported.
+    /// A value that is already zero at the state the stepper starts from is the
+    /// "before" of the first step, and that step reports a root as soon as the
+    /// value leaves zero toward the side the event counts. What stops a
+    /// resumption from reporting the root it is standing on is
+    /// [`RootGuard`](crate::RootGuard), which the same `roots` carries: the step
+    /// starting at that root's own time does not report that event again.
     pub fn advance_to_roots<F, const N: usize>(
         &mut self,
         t_target: f64,
