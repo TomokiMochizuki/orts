@@ -302,6 +302,11 @@ pub struct RootSet<'a, Y, const N: usize> {
     candidates: [bool; N],
     hits: [RootHit; N],
     hit_count: usize,
+    /// The raw value each event had at the located root, for the events that
+    /// fired. A projection can move the state back across the boundary, so the
+    /// value at the committed state says nothing about which side the crossing
+    /// went to.
+    located: [f64; N],
 }
 
 impl<'a, Y, const N: usize> RootSet<'a, Y, N> {
@@ -335,6 +340,7 @@ impl<'a, Y, const N: usize> RootSet<'a, Y, N> {
                 priority: 0,
             }; N],
             hit_count: 0,
+            located: [0.0; N],
         })
     }
 
@@ -450,6 +456,7 @@ impl<'a, Y, const N: usize> RootSet<'a, Y, N> {
     /// and then by registration, and report whether any is terminal.
     fn record_hits(&mut self, t_start: f64, values: &[f64; N]) -> bool {
         self.hit_count = 0;
+        self.located = *values;
         for (index, &after) in values.iter().enumerate() {
             if self.candidates[index] && self.crossed(index, t_start, self.values[index], after) {
                 let event = self.events[index];
@@ -509,7 +516,10 @@ impl<'a, Y, const N: usize> RootSet<'a, Y, N> {
         for (index, &value) in values.iter().enumerate() {
             if fired[index] {
                 self.guards[index].at = Some(t);
-                self.guards[index].left = value;
+                // The raw value at the crossing, not `value`: a projection can
+                // put the committed state back on the side the walk came from,
+                // and resuming from there is not a departure from this root.
+                self.guards[index].left = self.located[index];
                 self.guards[index].on_boundary = true;
             } else {
                 // The walk has taken a step that did not end on this event's
@@ -587,6 +597,13 @@ impl<Y: Clone, const N: usize> RootSet<'_, Y, N> {
                 // tight as the clock can express, which is tighter than asked.
                 break;
             }
+            // The widths can still be distinct where the times they name are
+            // not: at `t0 = 1e15` the spacing is `0.125`, so `t0 + 0.03125` is
+            // `t0`. Narrowing past that point would commit a state at a time
+            // the clock never left.
+            if t0 + mid == t0 + lo || t0 + mid == t0 + hi {
+                break;
+            }
             let y_mid = raw_step(mid)?;
             let mut values_mid = [0.0; N];
             self.values_at(t0 + mid, &y_mid, &mut values_mid)?;
@@ -599,6 +616,13 @@ impl<Y: Clone, const N: usize> RootSet<'_, Y, N> {
             }
         }
 
+        // The located time has to be one the clock actually reached. Where the
+        // spacing of f64 at `t0` is wider than the bracket, it is not, and
+        // publishing it would hand the caller a state at a time the walk
+        // never advanced to.
+        if t0 + hi == t0 {
+            return Err(IntegrationError::TimeStagnated { t: t0, dt: hi });
+        }
         let terminal = self.record_hits(t0, &values_hi);
         Ok(StepRoots::Found {
             t: t0 + hi,
@@ -1136,6 +1160,85 @@ mod tests {
             set.scan_step(t_root, 1.0, &0.0, |w| Ok(1.0 - w))
                 .expect("no error"),
             StepRoots::Found { .. }
+        ));
+    }
+
+    /// A projection that puts the committed state back on the side the walk came
+    /// from does not make the resumed step a departure.
+    ///
+    /// The guard has to remember the side the *crossing* went to, which is the
+    /// raw value the search read. Here the projection pulls the state back below
+    /// the level, so the value at the committed state has the sign it had before
+    /// the root; reading that as "the side the root left it" would suppress the
+    /// next genuine crossing for a whole step.
+    #[test]
+    fn a_projection_back_across_the_boundary_does_not_suppress_the_next_crossing() {
+        let level = Level {
+            terminal: false,
+            crossing: Crossing::Rising,
+            ..Level::at(0.5)
+        };
+        let mut set = RootSet::new(
+            [&level as &dyn RootEvent<f64>],
+            RootSearch {
+                t_tolerance: 1e-12,
+                max_iterations: 200,
+            },
+        )
+        .expect("valid");
+        set.begin(0.0, &0.0).expect("finite value");
+        let t_root = match set.scan_step(0.0, 1.0, &1.0, ramp).expect("located") {
+            StepRoots::Found { t, .. } => {
+                // The stepper projects the located state back under the level,
+                // the way a clamping constraint would, and commits that.
+                let projected = 0.25;
+                commit(&mut set, t, &projected);
+                assert!(
+                    set.guard(0).is_on_boundary(),
+                    "the event fired, so its guard is set"
+                );
+                t
+            }
+            StepRoots::None => panic!("the ramp crosses 0.5"),
+        };
+
+        // Resuming from under the level and rising through it again is a
+        // crossing: the root went to the far side, and the state is no longer
+        // there.
+        set.begin(t_root, &0.25).expect("finite value");
+        assert!(matches!(
+            set.scan_step(t_root, 1.0, &1.25, |w| Ok(0.25 + w))
+                .expect("no error"),
+            StepRoots::Found { .. }
+        ));
+    }
+
+    /// A bracket the clock cannot express is refused rather than committed at a
+    /// time the walk never reached.
+    ///
+    /// At `t0 = 1e15` the spacing of f64 is `0.125`, so every width the search
+    /// would narrow to names the same instant as `t0`. Publishing one would hand
+    /// the caller a state at a time the walk never advanced to.
+    #[test]
+    fn a_root_the_clock_cannot_place_is_refused() {
+        const T0: f64 = 1e15;
+        let level = Level::at(0.03);
+        let mut set = RootSet::new(
+            [&level as &dyn RootEvent<f64>],
+            RootSearch {
+                t_tolerance: 1e-9,
+                max_iterations: 200,
+            },
+        )
+        .expect("valid");
+        set.begin(T0, &0.0).expect("finite value");
+        assert!(
+            T0 + 0.03125 == T0,
+            "the premise: widths this small name no new instant at {T0}"
+        );
+        assert!(matches!(
+            set.scan_step(T0, 0.0625, &0.0625, ramp),
+            Err(IntegrationError::TimeStagnated { .. })
         ));
     }
 

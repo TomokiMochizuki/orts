@@ -814,6 +814,81 @@ fn case_a_projection_that_breaks_the_value_leaves_the_walk_where_it_was<W: Walke
     );
 }
 
+/// The step size a root leaves behind is the one the accepted step earned.
+///
+/// A root cuts the step short, and the controller still moves `dt` from that
+/// step's error — the trials never touch it. The level is crossed inside the
+/// *first* step (`y = 0.02` at `t = 0.2`, within the configured `0.25`), so no
+/// earlier step has moved `dt` and what is left is the root-bearing step's own
+/// doing. Checked on the adaptive steppers; the fixed one has no step size to
+/// move.
+fn case_a_root_still_moves_the_step_size<W: Walker<Sys = Ramp> + HasStepSize>(
+    label: &str,
+    mut walker: W,
+) {
+    let event = AtLevel::rising(0.02);
+    let mut roots =
+        RootSet::new([&event as &dyn RootEvent<State<1, 1>>], SEARCH).expect("valid search");
+    let mut reported = Vec::new();
+
+    assert_eq!(
+        walker.dt(),
+        DT,
+        "{label}: the walk starts at the configured dt"
+    );
+    let outcome = walker
+        .advance(T_END, &mut reported, &mut roots)
+        .expect("the walk succeeds");
+    match outcome {
+        RootOutcome::Roots { t, .. } => {
+            assert!(
+                (t - 0.2).abs() <= SLACK,
+                "{label}: the crossing is inside the first step, located {t}"
+            );
+        }
+        RootOutcome::Reached => panic!("{label}: the ramp reaches 0.02 in the first step"),
+    }
+    assert_ne!(
+        walker.dt(),
+        DT,
+        "{label}: the accepted step's error moved the step size, even though a root \
+         cut the step short"
+    );
+}
+
+/// The adaptive steppers' step size, for the case above.
+trait HasStepSize {
+    fn dt(&self) -> f64;
+}
+
+impl HasStepSize for AdaptiveStepper<'static, Ramp> {
+    fn dt(&self) -> f64 {
+        AdaptiveStepper::dt(self)
+    }
+}
+
+impl HasStepSize for AdaptiveStepper853<'static, Ramp> {
+    fn dt(&self) -> f64 {
+        AdaptiveStepper853::dt(self)
+    }
+}
+
+macro_rules! step_size_contract_for {
+    ($solver:ident, $walker:expr) => {
+        mod $solver {
+            use super::*;
+
+            #[test]
+            fn a_root_still_moves_the_step_size() {
+                case_a_root_still_moves_the_step_size(stringify!($solver), $walker);
+            }
+        }
+    };
+}
+
+step_size_contract_for!(dp45_step_size, dp45_walker());
+step_size_contract_for!(dop853_step_size, dop853_walker());
+
 macro_rules! contract_for {
     ($solver:ident, $walker:expr) => {
         mod $solver {

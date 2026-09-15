@@ -520,16 +520,20 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper853<'a, S> {
 
                 callback(self.t, &self.state);
 
-                if let Some(outcome) = outcome {
-                    return Ok(outcome);
-                }
-
+                // From the error of the step that was accepted, whether or not a
+                // root cut it short: the trials never touch this, and a walk
+                // resumed from a boundary starts with the size the full step
+                // earned.
                 let factor = if err < 1e-15 {
                     MAX_FACTOR
                 } else {
                     (SAFETY * err.powf(-ORDER_EXP)).clamp(MIN_FACTOR, MAX_FACTOR)
                 };
                 self.dt = h * factor;
+
+                if let Some(outcome) = outcome {
+                    return Ok(outcome);
+                }
             } else {
                 let factor = (SAFETY * err.powf(-ORDER_EXP)).clamp(MIN_FACTOR, 1.0);
                 self.dt = h * factor;
