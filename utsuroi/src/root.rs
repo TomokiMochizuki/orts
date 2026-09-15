@@ -51,9 +51,11 @@
 //! direction. Bound the step size so a step holds one; the search can only read
 //! the value at times it picks, so it cannot check this for the caller.
 //!
-//! Detection needs a sign change, so a walk whose very first state sits exactly
-//! on a boundary reports no root for it: that is also the state a previous root
-//! leaves behind, and the two cannot be told apart from the value alone.
+//! A walk whose first state sits exactly on a boundary reports a root as soon as
+//! the value leaves zero, in whichever direction the event counts. What a
+//! resumption after a non-terminal root does instead — where the state is also
+//! on the boundary — is settled by [`RootGuard`]: the step that starts at the
+//! root's own time does not report that event again.
 //!
 //! # Storage
 //!
@@ -79,12 +81,14 @@ pub enum Crossing {
 impl Crossing {
     /// Whether a move from `before` to `after` is the crossing this counts.
     ///
-    /// Landing exactly on zero counts, from whichever side; leaving zero does
-    /// not. A non-terminal root leaves the state on the boundary, and a walk
-    /// resumed from there must not report the departure as a fresh crossing.
+    /// A value that arrives at exactly zero counts, and one that leaves zero
+    /// counts toward the side it goes to: at the endpoints of a step those two
+    /// are the same pair of numbers, and whether the state was left there by a
+    /// root is what tells them apart. [`RootGuard`] holds that, so this reads
+    /// only the two values.
     fn matches(self, before: f64, after: f64) -> bool {
-        let rising = before < 0.0 && after >= 0.0;
-        let falling = before > 0.0 && after <= 0.0;
+        let rising = before <= 0.0 && after >= 0.0 && (before < 0.0 || after > 0.0);
+        let falling = before >= 0.0 && after <= 0.0 && (before > 0.0 || after < 0.0);
         match self {
             Crossing::Rising => rising,
             Crossing::Falling => falling,
@@ -647,14 +651,65 @@ mod tests {
         assert!(Crossing::Either.matches(1.0, -1.0));
     }
 
+    /// Zero counts toward whichever side the value is on at the other end.
+    ///
+    /// Arriving at zero and leaving zero are the same pair of numbers at a
+    /// step's endpoints, so this cannot tell them apart and does not try. What
+    /// separates them is whether a root left the state there, which
+    /// [`RootGuard`] holds — see
+    /// `the_boundary_a_root_left_is_not_reported_again_from_the_state_it_left`.
     #[test]
-    fn landing_exactly_on_zero_is_a_crossing_but_leaving_it_is_not() {
+    fn zero_counts_toward_the_side_the_value_reaches() {
+        // Arriving.
         assert!(Crossing::Rising.matches(-1.0, 0.0));
         assert!(Crossing::Falling.matches(1.0, 0.0));
-        assert!(!Crossing::Rising.matches(0.0, 1.0));
-        assert!(!Crossing::Falling.matches(0.0, -1.0));
-        assert!(!Crossing::Either.matches(0.0, 1.0));
-        assert!(!Crossing::Either.matches(0.0, -1.0));
+        // Leaving.
+        assert!(Crossing::Rising.matches(0.0, 1.0));
+        assert!(Crossing::Falling.matches(0.0, -1.0));
+        // Each direction still ignores the other.
+        assert!(!Crossing::Rising.matches(0.0, -1.0));
+        assert!(!Crossing::Falling.matches(0.0, 1.0));
+        // Staying put is no crossing at all.
+        assert!(!Crossing::Rising.matches(0.0, 0.0));
+        assert!(!Crossing::Falling.matches(0.0, 0.0));
+        assert!(!Crossing::Either.matches(0.0, 0.0));
+    }
+
+    /// A step that starts on the boundary and crosses later in that step still
+    /// reports the later crossing.
+    ///
+    /// `g(t) = t (0.5 - t)` over `[0, 1]` starts at zero, rises, and falls back
+    /// through zero at `t = 0.5` — one change of sign, which the contract
+    /// allows. Reading the endpoints alone gives `(0, -0.5)`; treating a
+    /// departure from zero as no crossing would discard the step and lose the
+    /// event.
+    #[test]
+    fn a_step_starting_on_the_boundary_still_reports_a_later_crossing() {
+        struct Arch;
+        impl RootEvent<f64> for Arch {
+            fn value(&self, t: f64, _y: &f64) -> f64 {
+                t * (0.5 - t)
+            }
+        }
+        let event = Arch;
+        let mut set = RootSet::new(
+            [&event as &dyn RootEvent<f64>],
+            RootSearch {
+                t_tolerance: 1e-9,
+                max_iterations: 60,
+            },
+        )
+        .expect("valid");
+        set.begin(0.0, &0.0).expect("finite value");
+        match set.scan_step(0.0, 1.0, &1.0, ramp).expect("located") {
+            StepRoots::Found { t, .. } => {
+                assert!(
+                    (t - 0.5).abs() <= 1e-9,
+                    "located {t}, the crossing is at 0.5"
+                );
+            }
+            StepRoots::None => panic!("the value falls back through zero at 0.5"),
+        }
     }
 
     struct Level {
