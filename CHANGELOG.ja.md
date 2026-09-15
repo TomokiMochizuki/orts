@@ -913,6 +913,25 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `utsuroi` (Rust, crates.io)
 
 #### Added
+- `RootEvent` を追加。時刻ではなく状態が決める境界を表す。燃焼窓の端は既知の時刻なので
+  `Segments` で span を刻めるが、reaction wheel の飽和や推進剤の枯渇は時刻が分からず、
+  それを起こすステップの内側で交差を見つける必要がある。event は符号付き関数の零点で、
+  数える向き・到達で walk を終えるか・同時に交差した event との順序を自分で申告する。
+  `RootSet` が event とそれぞれがステップ間で持つ状態を束ね、`advance_to_roots` が
+  `FixedStepper` / `AdaptiveStepper` / `AdaptiveStepper853` のいずれでも境界で止まり、
+  その時刻の状態を残す。
+
+  検出は `OdeState::project` の前、生の候補で行う。projection は状態を制約面に戻す操作で、
+  交差を示す符号変化を消してしまうことがある。局所化は確定済みの始点から刻みを縮めて
+  再計算する二分法で、adaptive solver がどちらも dense output を持たないためである。
+  探索が試す状態は callback にも projection にも渡らない。event 数は const parameter なので
+  crate は引き続き allocation を行わない。
+
+  呼び手が守るべき点は DESIGN.md に 2 つ書いた。1 つのステップが含んでよい符号変化は各 event の
+  値について 1 回まで。もう 1 つは、探索の間は離散モードを凍結すること。モードの切り替わりを
+  跨いで RK4 を再ステップすると、境界までの残り $r$ に対して二分法は $6r/5$ の刻みを返し、
+  到達時刻を $0.2r$ 遅く報告する (刻み 8 通りで実測し、テストで固定した)。
+  ([#508](https://github.com/sksat/orts/pull/508))
 - `Integrator::stepper` を追加。状態とその時刻を保持し、目標時刻を次々に与えて進める
   `FixedStepper` を返す。`stepper` / `from_checked_state` / `advance_to` という 3 つの呼び出しは
   adaptive solver が既に持っていたもので、どこで止まるかを進みながら決める伝播ループは、
@@ -960,6 +979,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   ([#409](https://github.com/sksat/orts/pull/409))
 
 #### Changed
+- `Integrator` は `step_unprojected` を要求し、`step` はそれを projection する既定実装になった。
+  root event の探索は生の候補を読むが、どの実装も projection の前にそれを作っていた。
+  この workspace の外に `Integrator` の実装がある場合は**破壊的変更**で、`step` を
+  `step_unprojected` に改名して `project` の呼び出しを外す。([#508](https://github.com/sksat/orts/pull/508))
 - stepper の outcome 型を 1 つに統合。`AdvanceOutcome853` は同じ 2 variant のもう 1 つの写しで、
   実行時に solver を選ぶ呼び出し側は同じ 2 つの腕を 2 回書く必要があった。**`AdvanceOutcome853`
   は削除**し、DOP853 の `advance_to` は `AdvanceOutcome` を返す。([#458](https://github.com/sksat/orts/pull/458))
