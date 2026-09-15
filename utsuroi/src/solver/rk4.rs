@@ -12,7 +12,13 @@ impl Integrator for Rk4 {
     /// k3 = f(t + dt/2, y + dt/2 * k2)
     /// k4 = f(t + dt, y + dt * k3)
     /// y_next = y + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
-    fn step<S: DynamicalSystem>(&self, system: &S, t: f64, state: &S::State, dt: f64) -> S::State {
+    fn step_unprojected<S: DynamicalSystem>(
+        &self,
+        system: &S,
+        t: f64,
+        state: &S::State,
+        dt: f64,
+    ) -> S::State {
         let k1 = system.derivatives(t, state);
 
         let s2 = state.axpy(dt / 2.0, &k1);
@@ -26,11 +32,7 @@ impl Integrator for Rk4 {
 
         // y + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
         let k_sum = k1.axpy(2.0, &k2).axpy(2.0, &k3).axpy(1.0, &k4);
-        let mut result = state.axpy(dt / 6.0, &k_sum);
-        // RK4 keeps no stage derivative across steps, so it can ignore whether
-        // the projection changed the state.
-        let _ = result.project(t + dt);
-        result
+        state.axpy(dt / 6.0, &k_sum)
     }
 }
 

@@ -4,6 +4,7 @@ mod error;
 mod fixed_step;
 mod integrator;
 pub(crate) mod math;
+mod root;
 mod segment;
 mod segment_walk;
 mod solver;
@@ -16,6 +17,8 @@ mod contract;
 #[cfg(test)]
 mod projection;
 #[cfg(test)]
+mod root_contract;
+#[cfg(test)]
 pub(crate) mod test_systems;
 
 pub use error::{
@@ -23,6 +26,7 @@ pub use error::{
 };
 pub use fixed_step::FixedStepper;
 pub use integrator::Integrator;
+pub use root::{Crossing, RootEvent, RootGuard, RootHit, RootOutcome, RootSearch, RootSet};
 pub use segment::{SegmentContext, SegmentSystem, derivatives_maybe_in_segment};
 pub use segment_walk::{Segment, Segments};
 pub use solver::dop853::{AdaptiveStepper853, Dop853};

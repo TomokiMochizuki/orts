@@ -2,17 +2,43 @@ use core::convert::Infallible;
 use core::ops::ControlFlow;
 
 use crate::fixed_step::FixedStepper;
-use crate::{AdvanceOutcome, DynamicalSystem, IntegrationError, IntegrationOutcome};
+use crate::{AdvanceOutcome, DynamicalSystem, IntegrationError, IntegrationOutcome, OdeState};
 
 /// Common interface for fixed-step numerical integrators.
 ///
-/// Implementors provide [`step`](Integrator::step), which advances the state
-/// by a single time step. Default implementations of [`integrate`](Integrator::integrate)
-/// and [`integrate_with_events`](Integrator::integrate_with_events) build on `step`
-/// to provide multi-step integration with optional event detection.
+/// Implementors provide
+/// [`step_unprojected`](Integrator::step_unprojected), which advances the state
+/// by a single time step and leaves the result raw. Default implementations of
+/// [`step`](Integrator::step), [`integrate`](Integrator::integrate) and
+/// [`integrate_with_events`](Integrator::integrate_with_events) build on it to
+/// provide multi-step integration with optional event detection.
 pub trait Integrator {
-    /// Perform a single integration step, advancing the state from `t` by `dt`.
-    fn step<S: DynamicalSystem>(&self, system: &S, t: f64, state: &S::State, dt: f64) -> S::State;
+    /// One integration step from `t` by `dt`, without the post-step
+    /// projection.
+    ///
+    /// This is the raw candidate the method produced. A root-event search reads
+    /// it: [`OdeState::project`](crate::OdeState::project) pulls a state back
+    /// onto its constraint surface, and can erase the very sign change that
+    /// shows a boundary was crossed. It is also what the search re-steps with
+    /// while narrowing a bracket, so the states it tries are never projected.
+    fn step_unprojected<S: DynamicalSystem>(
+        &self,
+        system: &S,
+        t: f64,
+        state: &S::State,
+        dt: f64,
+    ) -> S::State;
+
+    /// One integration step from `t` by `dt`, projected.
+    ///
+    /// What a caller stepping by hand wants: the state is the one a walk would
+    /// publish. A fixed-step method keeps no stage derivative across steps, so
+    /// whether the projection changed anything does not matter here.
+    fn step<S: DynamicalSystem>(&self, system: &S, t: f64, state: &S::State, dt: f64) -> S::State {
+        let mut result = self.step_unprojected(system, t, state, dt);
+        let _ = result.project(t + dt);
+        result
+    }
 
     /// Integrate a dynamical system from `t0` to `t_end` using fixed step size `dt`.
     ///

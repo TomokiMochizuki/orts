@@ -89,6 +89,40 @@ pub enum IntegrationError {
     /// walk refuses only where the span crosses zero from `1e14` or further
     /// away in a single step.
     LandingUnreachable { t: f64, h: f64, landing: f64 },
+    /// A [`RootEvent`](crate::RootEvent) reported a non-finite value at `t`.
+    /// The sign of such a value says nothing about which side of the boundary
+    /// the state is on, so neither the detection nor the search that follows it
+    /// would mean anything.
+    NonFiniteRootValue { t: f64, event: usize },
+    /// A [`RootSearch`](crate::RootSearch) cannot narrow a bracket: the
+    /// tolerance is not positive and finite, or no iteration is allowed.
+    InvalidRootSearch {
+        t_tolerance: f64,
+        max_iterations: u32,
+    },
+    /// The bisection ran out of iterations with the bracket still wider than
+    /// the tolerance, so the crossing was never pinned down. A value that
+    /// changes sign without being continuous in `t` does this.
+    RootNotLocalized { t: f64, bracket: f64 },
+    /// A step of width `h` taken while narrowing a bracket failed the adaptive
+    /// solver's own error control, with error norm `err`.
+    ///
+    /// The step is narrower than the one already accepted from the same start,
+    /// so its local error should be the smaller of the two. Where it is not,
+    /// the state the search would read its value at is not on a trajectory the
+    /// solver can represent there, and a crossing time derived from it would
+    /// name nothing. The search does not subdivide further: it has no
+    /// step-size control of its own, by design, so that the trials cannot
+    /// move the one the walk uses.
+    RootTrialRejected { t: f64, h: f64, err: f64 },
+    /// A [`RootEvent`](crate::RootEvent) reported a boundary tolerance that is
+    /// negative or non-finite.
+    ///
+    /// The width is what re-arms an event's guard after a root. A negative one
+    /// re-arms it at once, so the boundary the state is still on is reported
+    /// again; a non-finite one never re-arms it, so the event fires once and
+    /// then never again.
+    InvalidBoundaryTolerance { event: usize, tolerance: f64 },
 }
 
 impl IntegrationError {
@@ -96,11 +130,11 @@ impl IntegrationError {
     /// carries one.
     ///
     /// `None` for the pre-flight argument checks ([`Self::InvalidStepSize`],
-    /// [`Self::InvalidTolerances`]), which reject before any step runs — the
-    /// caller's start time is the meaningful timestamp there. Callers that
-    /// need a `f64` unconditionally should use
-    /// `err.time().unwrap_or(start_t)`, which also keeps them compiling as
-    /// new variants are added.
+    /// [`Self::InvalidTolerances`], [`Self::InvalidRootSearch`]), which reject
+    /// before any step runs — the caller's start time is the meaningful
+    /// timestamp there. Callers that need a `f64` unconditionally should use
+    /// `err.time().unwrap_or(start_t)`, which also keeps them compiling as new
+    /// variants are added.
     pub fn time(&self) -> Option<f64> {
         match self {
             Self::NonFiniteState { t }
@@ -108,9 +142,15 @@ impl IntegrationError {
             | Self::IndeterminateErrorNorm { t }
             | Self::TimeStagnated { t, .. }
             | Self::StepBelowSpacing { t, .. }
-            | Self::LandingUnreachable { t, .. } => Some(*t),
+            | Self::LandingUnreachable { t, .. }
+            | Self::NonFiniteRootValue { t, .. }
+            | Self::RootNotLocalized { t, .. }
+            | Self::RootTrialRejected { t, .. } => Some(*t),
             Self::InvalidTimeSpan { t0, .. } => Some(*t0),
-            Self::InvalidStepSize { .. } | Self::InvalidTolerances { .. } => None,
+            Self::InvalidStepSize { .. }
+            | Self::InvalidTolerances { .. }
+            | Self::InvalidRootSearch { .. }
+            | Self::InvalidBoundaryTolerance { .. } => None,
         }
     }
 }
@@ -197,6 +237,46 @@ impl core::fmt::Display for IntegrationError {
                     f,
                     "a step of {dt} is narrower than the spacing {spacing} of f64 at t = {t}, \
                      so the clock cannot take it"
+                )
+            }
+            Self::NonFiniteRootValue { t, event } => {
+                write!(
+                    f,
+                    "root event {event} reported a non-finite value at t = {t}, \
+                     so which side of its boundary the state is on is unknown"
+                )
+            }
+            Self::InvalidRootSearch {
+                t_tolerance,
+                max_iterations,
+            } => {
+                write!(
+                    f,
+                    "a root search needs a positive finite bracket tolerance and at \
+                     least one iteration, got t_tolerance = {t_tolerance}, \
+                     max_iterations = {max_iterations}"
+                )
+            }
+            Self::RootNotLocalized { t, bracket } => {
+                write!(
+                    f,
+                    "the root search from t = {t} ran out of iterations with the bracket \
+                     still {bracket} wide"
+                )
+            }
+            Self::InvalidBoundaryTolerance { event, tolerance } => {
+                write!(
+                    f,
+                    "root event {event} reported a boundary tolerance of {tolerance}, \
+                     which has to be finite and not negative"
+                )
+            }
+            Self::RootTrialRejected { t, h, err } => {
+                write!(
+                    f,
+                    "a step of {h} taken from t = {t} while narrowing a root bracket \
+                     has error norm {err}, so the state the search read is not on the \
+                     trajectory"
                 )
             }
         }
@@ -399,6 +479,39 @@ mod tests {
                 },
                 "as the grid",
             ),
+            (
+                IntegrationError::NonFiniteRootValue { t: 5.0, event: 2 },
+                "non-finite value",
+            ),
+            (
+                IntegrationError::InvalidRootSearch {
+                    t_tolerance: 0.0,
+                    max_iterations: 60,
+                },
+                "bracket tolerance",
+            ),
+            (
+                IntegrationError::RootNotLocalized {
+                    t: 6.0,
+                    bracket: 0.5,
+                },
+                "ran out of iterations",
+            ),
+            (
+                IntegrationError::RootTrialRejected {
+                    t: 7.0,
+                    h: 0.25,
+                    err: 4.0,
+                },
+                "narrowing a root bracket",
+            ),
+            (
+                IntegrationError::InvalidBoundaryTolerance {
+                    event: 1,
+                    tolerance: -1.0,
+                },
+                "boundary tolerance",
+            ),
         ] {
             let msg = err.to_string();
             assert!(msg.contains(needle), "{err:?} display was {msg:?}");
@@ -447,8 +560,41 @@ mod tests {
                 },
                 Some(-1e16),
             ),
+            (
+                IntegrationError::NonFiniteRootValue { t: 8.0, event: 1 },
+                Some(8.0),
+            ),
+            (
+                IntegrationError::RootNotLocalized {
+                    t: 9.0,
+                    bracket: 0.5,
+                },
+                Some(9.0),
+            ),
+            (
+                IntegrationError::RootTrialRejected {
+                    t: 10.0,
+                    h: 0.25,
+                    err: 4.0,
+                },
+                Some(10.0),
+            ),
             // The pre-flight argument checks reject before any step runs.
             (IntegrationError::InvalidStepSize { dt: 0.0 }, None),
+            (
+                IntegrationError::InvalidRootSearch {
+                    t_tolerance: 0.0,
+                    max_iterations: 0,
+                },
+                None,
+            ),
+            (
+                IntegrationError::InvalidBoundaryTolerance {
+                    event: 0,
+                    tolerance: f64::NAN,
+                },
+                None,
+            ),
             (
                 IntegrationError::InvalidTolerances {
                     atol: 0.0,

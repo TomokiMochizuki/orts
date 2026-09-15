@@ -29,6 +29,7 @@ use core::ops::ControlFlow;
 use crate::error::{IntegrationError, validate_step_size, validate_time_span};
 #[cfg(not(feature = "std"))]
 use crate::math::F64Ext;
+use crate::root::{RootOutcome, RootSet, StepRoots};
 use crate::{AdvanceOutcome, DynamicalSystem, Integrator, OdeState};
 
 /// The step times of a fixed-step walk from `t0` to `t_end`.
@@ -307,6 +308,101 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
         }
 
         Ok(AdvanceOutcome::Reached)
+    }
+
+    /// Advance to `t_target` in steps of the configured `dt`, stopping at the
+    /// first boundary a [`RootEvent`] in `roots` describes.
+    ///
+    /// Each step is examined on its raw candidate, before the projection: if an
+    /// event changed sign over it, bisection re-steps from the step's own start
+    /// until the bracket is narrower than
+    /// [`RootSearch::t_tolerance`](crate::RootSearch::t_tolerance), and the
+    /// state at the boundary is what the stepper commits. The callback is
+    /// called there and nowhere else in the search, so the trial states never
+    /// leave this function.
+    ///
+    /// Reaching a boundary ends the walk whether or not the event is terminal:
+    /// `terminal` in the outcome says what the events asked for, and a caller
+    /// that resumes takes its next step from the boundary. The guards in
+    /// `roots` are what keep that step from reporting the departure as a new
+    /// crossing, so the same set has to be passed back.
+    ///
+    /// The events are asked nothing about the state the stepper starts from.
+    /// Detection needs a sign change, and a state sitting exactly on a boundary
+    /// is also what the previous root left behind.
+    pub fn advance_to_roots<F, const N: usize>(
+        &mut self,
+        t_target: f64,
+        mut callback: F,
+        roots: &mut RootSet<'_, S::State, N>,
+    ) -> Result<RootOutcome, IntegrationError>
+    where
+        F: FnMut(f64, &S::State),
+    {
+        validate_step_size(self.dt)?;
+        validate_time_span(self.t, t_target)?;
+        roots.begin(self.t, &self.state)?;
+
+        for step in FixedSteps::new(self.t, t_target, self.dt)? {
+            let step = step?;
+            let integrator = self.integrator;
+            let system = self.system;
+            let start = &self.state;
+            let raw_step = |width: f64| {
+                let candidate = integrator.step_unprojected(system, step.t, start, width);
+                if candidate.is_finite() {
+                    Ok(candidate)
+                } else {
+                    Err(IntegrationError::NonFiniteState { t: step.t + width })
+                }
+            };
+            // `FixedSteps` refuses any step whose width does not carry the
+            // clock to its landing, so `step.t + step.h` is `step.next_t` and
+            // the trial of the full width is the step itself.
+            let candidate = raw_step(step.h)?;
+            let located = roots.scan_step(step.t, step.h, &candidate, raw_step)?;
+
+            let (mut committed, t_committed, outcome) = match located {
+                StepRoots::None => (candidate, step.next_t, None),
+                StepRoots::Found {
+                    t,
+                    state,
+                    bracket,
+                    terminal,
+                } => (
+                    state,
+                    t,
+                    Some(RootOutcome::Roots {
+                        t,
+                        bracket,
+                        terminal,
+                    }),
+                ),
+            };
+            let _ = committed.project(t_committed);
+            // A projection can produce non-finite values of its own — a
+            // division by a zero norm, say — which the check on the raw
+            // candidate cannot see.
+            if !committed.is_finite() {
+                return Err(IntegrationError::NonFiniteState { t: t_committed });
+            }
+            // The values at the projected state are read before the stepper
+            // moves to it: a projection can put a root value out of range that
+            // the raw candidate had in range, and a walk that fails must leave
+            // the caller on the last state it accepted.
+            let values = roots.check(t_committed, &committed)?;
+            self.state = committed;
+            self.t = t_committed;
+            roots.apply(self.t, &values);
+
+            callback(self.t, &self.state);
+
+            if let Some(outcome) = outcome {
+                return Ok(outcome);
+            }
+        }
+
+        Ok(RootOutcome::Reached)
     }
 
     /// The state of the last accepted step.
