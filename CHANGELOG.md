@@ -1088,6 +1088,29 @@ section is subdivided by package.
 ### `utsuroi` (Rust, crates.io)
 
 #### Added
+- `RootEvent`, for a boundary the state decides rather than the clock. A burn
+  window's edges are known times, so a `Segments` walk cuts the span at them; a
+  reaction wheel saturating or a tank running dry has no known time, and the
+  crossing has to be found inside the step that makes it. An event is the zero
+  of a signed function and says which direction counts, whether reaching it ends
+  the walk, and how it orders against events that cross with it. `RootSet` pairs
+  the events with the state each carries between steps, and `advance_to_roots` —
+  on `FixedStepper`, `AdaptiveStepper` and `AdaptiveStepper853` alike — stops at
+  the boundary with the state and the time it belongs to.
+
+  Detection reads the raw candidate, before `OdeState::project`: a projection
+  pulls the state back onto its constraint surface and can erase the sign change
+  that shows the crossing. Localization is bisection re-stepping from the step's
+  own start, since neither adaptive solver carries a dense output, and the states
+  it tries reach neither the callback nor the projection. The set is fixed-size —
+  the event count is a const parameter — so the crate still allocates nothing.
+
+  Two things the caller owes, both in DESIGN.md: a step may hold at most one
+  change of sign of each event's value, and the discrete mode has to stay frozen
+  for the whole search. Re-stepping RK4 across a mode switch returns a width of
+  `6r/5` for a remaining distance `r`, reporting the arrival `0.2 r` late —
+  measured across eight step sizes, and pinned by a test.
+  ([#508](https://github.com/sksat/orts/pull/508))
 - `Integrator::stepper`, returning a `FixedStepper` that holds its state and the
   time it belongs to and is driven towards one target time after another —
   `stepper` / `from_checked_state` / `advance_to`, the three calls the adaptive
@@ -1146,6 +1169,11 @@ section is subdivided by package.
   before comparing what they cost. ([#409](https://github.com/sksat/orts/pull/409))
 
 #### Changed
+- `Integrator` requires `step_unprojected` and provides `step`, which projects
+  what it returns. A root-event search reads the raw candidate, and every
+  implementation already built one before projecting it. **Breaking** for an
+  `Integrator` outside this workspace: rename `step` to `step_unprojected` and
+  drop its `project` call. ([#508](https://github.com/sksat/orts/pull/508))
 - One `AdvanceOutcome` for every stepper. `AdvanceOutcome853` was a second copy
   of the same two variants, so a caller choosing its solver at run time had to
   write the same two arms twice. **`AdvanceOutcome853` is gone**; DOP853's

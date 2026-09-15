@@ -7,6 +7,7 @@ use coeff::*;
 use crate::error::{validate_step_size, validate_time_span};
 #[allow(unused_imports)]
 use crate::math::F64Ext;
+use crate::root::{RootOutcome, RootSet, StepRoots};
 use crate::{
     AdvanceOutcome, DynamicalSystem, IntegrationError, IntegrationOutcome, Integrator, OdeState,
     Tolerances,
@@ -206,12 +207,15 @@ fn dop853_step_with_fsal<S: DynamicalSystem>(
 }
 
 impl Integrator for Dop853 {
-    fn step<S: DynamicalSystem>(&self, system: &S, t: f64, state: &S::State, dt: f64) -> S::State {
+    fn step_unprojected<S: DynamicalSystem>(
+        &self,
+        system: &S,
+        t: f64,
+        state: &S::State,
+        dt: f64,
+    ) -> S::State {
         let k1 = system.derivatives(t, state);
-        let (mut y8, _) = dop853_candidate(system, t, state, dt, &k1);
-        // Fixed-step use keeps no derivative across steps, so the FSAL cache
-        // cannot go stale here.
-        let _ = y8.project(t + dt);
+        let (y8, _) = dop853_candidate(system, t, state, dt, &k1);
         y8
     }
 }
@@ -386,6 +390,166 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper853<'a, S> {
         }
 
         Ok(AdvanceOutcome::Reached)
+    }
+
+    /// Advance to `t_target`, stopping at the first boundary a
+    /// [`RootEvent`](crate::RootEvent) in `roots` describes.
+    ///
+    /// Each accepted step is examined on its raw candidate `y8`, before the
+    /// projection: if an event changed sign over it, bisection re-steps from
+    /// the step's own start with the same first-stage derivative until the
+    /// bracket is narrower than
+    /// [`RootSearch::t_tolerance`](crate::RootSearch::t_tolerance), and the
+    /// state at the boundary is what the stepper commits. The callback is
+    /// called there and nowhere else in the search.
+    ///
+    /// The trials cannot move the step size: it is grown or shrunk from the
+    /// error of the step that was accepted, exactly as in
+    /// [`advance_to`](Self::advance_to).
+    ///
+    /// Reaching a boundary ends the walk whether or not the event is terminal:
+    /// `terminal` in the outcome says what the events asked for, and a caller
+    /// that resumes takes its next step from the boundary. The guards in
+    /// `roots` are what keep that step from reporting the departure as a new
+    /// crossing, so the same set has to be passed back.
+    ///
+    /// A value that is already zero at the state the stepper starts from is the
+    /// "before" of the first step, and that step reports a root as soon as the
+    /// value leaves zero toward the side the event counts. What stops a
+    /// resumption from reporting the root it is standing on is
+    /// [`RootGuard`](crate::RootGuard), which the same `roots` carries: the step
+    /// starting at that root's own time does not report that event again.
+    pub fn advance_to_roots<F, const N: usize>(
+        &mut self,
+        t_target: f64,
+        mut callback: F,
+        roots: &mut RootSet<'_, S::State, N>,
+    ) -> Result<RootOutcome, IntegrationError>
+    where
+        F: FnMut(f64, &S::State),
+    {
+        self.tol.validate()?;
+        validate_step_size(self.dt)?;
+        validate_time_span(self.t, t_target)?;
+        roots.begin(self.t, &self.state)?;
+
+        while self.t < t_target {
+            let h = self.dt.min(t_target - self.t);
+            if self.t + h == self.t {
+                return Err(IntegrationError::TimeStagnated { t: self.t, dt: h });
+            }
+
+            let k1 = match self.k1.take() {
+                Some(k1) => k1,
+                None => self.system.derivatives(self.t, &self.state),
+            };
+            let (y8, error) = dop853_candidate(self.system, self.t, &self.state, h, &k1);
+
+            if !y8.is_finite() {
+                return Err(IntegrationError::NonFiniteState { t: self.t + h });
+            }
+
+            let err = self.state.error_norm(&y8, &error, &self.tol);
+            if err.is_nan() {
+                return Err(IntegrationError::IndeterminateErrorNorm { t: self.t });
+            }
+
+            if err <= 1.0 {
+                let t_next = self.t + h;
+                let located = {
+                    let system = self.system;
+                    let start = &self.state;
+                    let tol = &self.tol;
+                    let t0 = self.t;
+                    // Every trial starts from the state this step started from,
+                    // so it reuses that step's first stage rather than
+                    // re-evaluating the derivative there.
+                    let raw_step = |width: f64| {
+                        let (y, error) = dop853_candidate(system, t0, start, width, &k1);
+                        if !y.is_finite() {
+                            return Err(IntegrationError::NonFiniteState { t: t0 + width });
+                        }
+                        let err = start.error_norm(&y, &error, tol);
+                        if err.is_nan() {
+                            return Err(IntegrationError::IndeterminateErrorNorm { t: t0 });
+                        }
+                        if err > 1.0 {
+                            return Err(IntegrationError::RootTrialRejected {
+                                t: t0,
+                                h: width,
+                                err,
+                            });
+                        }
+                        Ok(y)
+                    };
+                    roots.scan_step(t0, h, &y8, raw_step)?
+                };
+
+                let (mut y, t_committed, outcome) = match located {
+                    StepRoots::None => (y8, t_next, None),
+                    StepRoots::Found {
+                        t,
+                        state,
+                        bracket,
+                        terminal,
+                    } => (
+                        state,
+                        t,
+                        Some(RootOutcome::Roots {
+                            t,
+                            bracket,
+                            terminal,
+                        }),
+                    ),
+                };
+                // The cache stays empty either way: stage 13 is `f(t_next, y8)`,
+                // which the next step evaluates for itself at the projected
+                // state.
+                let _ = y.project(t_committed);
+                if !y.is_finite() {
+                    roots.discard_hits();
+                    return Err(IntegrationError::NonFiniteState { t: t_committed });
+                }
+                // Read before the stepper moves: a projection can put a root
+                // value out of range that the raw candidate had in range, and a
+                // walk that fails must leave the caller on the last state it
+                // accepted.
+                let values = roots.check(t_committed, &y)?;
+                self.state = y;
+                self.t = t_committed;
+                roots.apply(self.t, &values);
+
+                callback(self.t, &self.state);
+
+                // From the error of the step that was accepted, whether or not a
+                // root cut it short: the trials never touch this, and a walk
+                // resumed from a boundary starts with the size the full step
+                // earned.
+                let factor = if err < 1e-15 {
+                    MAX_FACTOR
+                } else {
+                    (SAFETY * err.powf(-ORDER_EXP)).clamp(MIN_FACTOR, MAX_FACTOR)
+                };
+                self.dt = h * factor;
+
+                if let Some(outcome) = outcome {
+                    return Ok(outcome);
+                }
+            } else {
+                let factor = (SAFETY * err.powf(-ORDER_EXP)).clamp(MIN_FACTOR, 1.0);
+                self.dt = h * factor;
+                self.k1 = Some(k1);
+
+                if self.dt < self.dt_min {
+                    return Err(IntegrationError::StepSizeTooSmall {
+                        t: self.t,
+                        dt: self.dt,
+                    });
+                }
+            }
+        }
+
+        Ok(RootOutcome::Reached)
     }
 
     /// Current state.
