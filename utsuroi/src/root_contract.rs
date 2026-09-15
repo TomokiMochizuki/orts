@@ -202,6 +202,105 @@ impl Scalar for Breaking {
     }
 }
 
+/// A state that reports the accepted step as accurate and every root-search
+/// trial as over tolerance.
+///
+/// The branch under test needs a shorter step whose error estimate is worse
+/// than the accepted step's, which no smooth system produces: a trial from the
+/// same start is a sub-interval, so its local error is the smaller of the two.
+/// Rather than build a right-hand side non-smooth enough to invert that, the
+/// state forces the answer. `advance_to_roots` asks for the accepted step's
+/// error norm once and then one per trial, in that order, so the first call is
+/// the step and the rest are trials.
+#[derive(Clone, Debug, PartialEq)]
+struct Forced {
+    y: f64,
+}
+
+thread_local! {
+    static NORMS_ASKED: Cell<usize> = const { Cell::new(0) };
+}
+
+impl OdeState for Forced {
+    fn zero_like(&self) -> Self {
+        Self { y: 0.0 }
+    }
+    fn axpy(&self, scale: f64, other: &Self) -> Self {
+        Self {
+            y: self.y + scale * other.y,
+        }
+    }
+    fn scale(&self, factor: f64) -> Self {
+        Self { y: self.y * factor }
+    }
+    fn is_finite(&self) -> bool {
+        self.y.is_finite()
+    }
+    fn error_norm(&self, _y_next: &Self, _error: &Self, _tol: &Tolerances) -> f64 {
+        let asked = NORMS_ASKED.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        if asked == 0 { 0.5 } else { 2.0 }
+    }
+}
+
+impl Scalar for Forced {
+    fn scalar(&self) -> f64 {
+        self.y
+    }
+}
+
+/// `dy/dt = 1` on the state above.
+struct Forcing;
+
+impl DynamicalSystem for Forcing {
+    type State = Forced;
+    fn derivatives(&self, _t: f64, _state: &Self::State) -> Self::State {
+        Forced { y: 1.0 }
+    }
+}
+
+impl RootEvent<Forced> for ClampedLevel {
+    fn value(&self, _t: f64, y: &Forced) -> f64 {
+        y.y - self.level
+    }
+    fn crossing(&self) -> Crossing {
+        Crossing::Rising
+    }
+}
+
+/// A trial the solver refuses fails the walk where it stands.
+///
+/// The state is where the walk started, the time has not moved, and the hits the
+/// search had not yet recorded stay empty: a trial that failed error control is
+/// not a trajectory, and a crossing time read off it would name nothing.
+fn case_a_refused_trial_leaves_the_walk_where_it_started<W: Walker<Sys = Forcing> + HasStepSize>(
+    label: &str,
+    mut walker: W,
+) {
+    let event = ClampedLevel { level: 0.02 };
+    let mut roots = RootSet::new([&event as &dyn RootEvent<Forced>], SEARCH).expect("valid search");
+    let mut reported = Vec::new();
+
+    let err = walker
+        .advance(T_END, &mut reported, &mut roots)
+        .expect_err("every trial is over tolerance");
+    assert!(
+        matches!(err, IntegrationError::RootTrialRejected { .. }),
+        "{label}: {err:?}"
+    );
+    assert_eq!(walker.t(), T0, "{label}: the walk did not move");
+    assert_eq!(
+        walker.y(),
+        0.0,
+        "{label}: the state is the one it started from"
+    );
+    assert!(roots.hits().is_empty(), "{label}: hits {:?}", roots.hits());
+    assert!(reported.is_empty(), "{label}: nothing was reported");
+}
+
 /// `dy/dt = 1` on a state whose projection breaks past the level.
 struct Broken;
 
@@ -1104,6 +1203,48 @@ macro_rules! broken_contract_for {
         }
     };
 }
+
+macro_rules! trial_contract_for {
+    ($solver:ident, $walker:expr) => {
+        mod $solver {
+            use super::*;
+
+            #[test]
+            fn a_refused_trial_leaves_the_walk_where_it_started() {
+                case_a_refused_trial_leaves_the_walk_where_it_started(stringify!($solver), $walker);
+            }
+        }
+    };
+}
+
+static FORCING: Forcing = Forcing;
+
+fn forced_start() -> Forced {
+    Forced { y: 0.0 }
+}
+
+fn dp45_forced() -> AdaptiveStepper<'static, Forcing> {
+    DP45.stepper(&FORCING, forced_start(), T0, DT, Tolerances::default())
+}
+
+fn dop853_forced() -> AdaptiveStepper853<'static, Forcing> {
+    DOP853.stepper(&FORCING, forced_start(), T0, DT, Tolerances::default())
+}
+
+impl HasStepSize for AdaptiveStepper<'static, Forcing> {
+    fn dt(&self) -> f64 {
+        AdaptiveStepper::dt(self)
+    }
+}
+
+impl HasStepSize for AdaptiveStepper853<'static, Forcing> {
+    fn dt(&self) -> f64 {
+        AdaptiveStepper853::dt(self)
+    }
+}
+
+trial_contract_for!(dp45_refused_trial, dp45_forced());
+trial_contract_for!(dop853_refused_trial, dop853_forced());
 
 static BROKEN: Broken = Broken;
 
