@@ -1873,6 +1873,55 @@ mod tests {
         );
     }
 
+    /// Switching an event off and on again re-arms its guard, so the boundary
+    /// the walk is standing on can be reported again.
+    ///
+    /// While the event is off its value goes unread, and the side a root left
+    /// it on says nothing about where it is when it comes back. The step that
+    /// the guard would have suppressed — "this is the root already reported" —
+    /// is a crossing again.
+    #[test]
+    fn switching_an_event_off_and_on_re_arms_its_guard() {
+        let level = Level::at(0.5);
+        root_set!(set, RootSearch::default(), &level as &dyn RootEvent<f64>);
+        set.begin(0.0, &0.0).expect("finite value");
+        let (root_t, root_y) = match set.scan_step(0.0, 1.0, &1.0, ramp).expect("located") {
+            StepRoots::Found { t, state, .. } => {
+                commit(&mut set, t, &state);
+                (t, state)
+            }
+            _ => panic!("expected a located root"),
+        };
+        assert_eq!(set.guard(0).at(), Some(root_t));
+        assert!(set.guard(0).is_on_boundary());
+
+        // A step back across the boundary from the root's own time is the root
+        // already reported, so the guard suppresses it.
+        let back_down = |width: f64| Ok(root_y - width * 0.2);
+        let end = root_y - 0.2;
+        set.begin(root_t, &root_y).expect("finite value");
+        assert!(matches!(
+            set.scan_step(root_t, 1.0, &end, back_down)
+                .expect("no error"),
+            StepRoots::None
+        ));
+
+        set.deactivate(0);
+        set.activate(0);
+        assert_eq!(set.guard(0).at(), None, "coming back re-arms the guard");
+        assert!(!set.guard(0).is_on_boundary());
+
+        set.begin(root_t, &root_y).expect("finite value");
+        assert!(
+            matches!(
+                set.scan_step(root_t, 1.0, &end, back_down)
+                    .expect("located"),
+                StepRoots::Found { .. }
+            ),
+            "the same step is a crossing for an event that has just come back"
+        );
+    }
+
     /// The roots of the bracket the walk committed to stay readable while the
     /// caller switches events, which is what it does while handling them.
     #[test]
