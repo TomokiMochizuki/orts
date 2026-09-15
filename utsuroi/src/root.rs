@@ -37,8 +37,10 @@
 //! the change after landing; a continuous state feedback is fine to evaluate at
 //! every stage, it is the discrete mode that has to hold still.
 //!
-//! **One step may hold at most one change of sign of an event's value**, in
-//! either direction — not one crossing in the direction the event counts. What
+//! **One step may hold at most one change of sign of each event's value**, in
+//! either direction — not one crossing in the direction the event counts. Two
+//! events may each change sign in the same step; that is what a group of
+//! simultaneous roots is. What
 //! detection reads is the value at the step's start against the value at a
 //! trial end, so a step holding two changes of sign reports nothing at all, and
 //! one holding three converges on the last: for
@@ -153,8 +155,10 @@ pub trait RootEvent<Y> {
 ///   behind. A step that starts at that time with the value still on that side
 ///   is the one leaving the root, and it does not report the same event again.
 ///   Both comparisons are exact and need no tolerance. A caller that moves the
-///   value across zero before resuming has moved the state off that root, so
-///   the step it then takes reports a crossing as any other would.
+///   value to the other side of zero, and clear of the event's
+///   [`boundary_tolerance`](RootEvent::boundary_tolerance), has moved the state
+///   off that root, so the step it then takes reports a crossing as any other
+///   would.
 /// - whether the value is still within the event's
 ///   [`boundary_tolerance`](RootEvent::boundary_tolerance), for a state that
 ///   goes on moving along the boundary over many steps.
@@ -171,10 +175,17 @@ pub struct RootGuard {
     on_boundary: bool,
 }
 
-/// Whether two values are on the same side of zero, counting zero as positive
-/// so that every finite pair has an answer.
+/// Whether two values are on the same side of zero.
+///
+/// Zero is on no side, so it matches only zero: a root that landed exactly on
+/// the boundary left the value with no side, and any non-zero value the caller
+/// puts there has moved it off.
 fn same_side(a: f64, b: f64) -> bool {
-    (a >= 0.0) == (b >= 0.0)
+    if a == 0.0 || b == 0.0 {
+        a == b
+    } else {
+        (a > 0.0) == (b > 0.0)
+    }
 }
 
 impl RootGuard {
@@ -476,6 +487,12 @@ impl<'a, Y, const N: usize> RootSet<'a, Y, N> {
             return Err(e);
         }
         Ok(values)
+    }
+
+    /// Drop the hits the search recorded, for a stepper that refuses the state
+    /// they belong to before it asks for their values.
+    pub(crate) fn discard_hits(&mut self) {
+        self.hit_count = 0;
     }
 
     /// Record where the walk now is: the events that just fired are on their
@@ -1067,6 +1084,55 @@ mod tests {
         );
         assert!(matches!(
             set.scan_step(t_root, 1.0, &(below + 1.0), |w| Ok(below + w))
+                .expect("no error"),
+            StepRoots::Found { .. }
+        ));
+    }
+
+    /// A root that landed exactly on zero left the value with no side, so a
+    /// caller that moves it anywhere non-zero has moved the state off that root.
+    ///
+    /// `Crossing::Falling` reaching the level from above lands on exactly zero
+    /// when the level is a grid time of the walk. Treating zero as the positive
+    /// side would then read a return to positive as "still where the root left
+    /// it" and suppress the fall that follows.
+    #[test]
+    fn a_root_that_landed_on_zero_does_not_claim_a_side() {
+        let level = Level {
+            terminal: false,
+            crossing: Crossing::Falling,
+            ..Level::at(0.5)
+        };
+        let mut set = RootSet::new(
+            [&level as &dyn RootEvent<f64>],
+            RootSearch {
+                t_tolerance: 1e-12,
+                max_iterations: 200,
+            },
+        )
+        .expect("valid");
+
+        // Fall from 1.0 and land on the level exactly: the value at the root is
+        // exactly zero.
+        set.begin(0.0, &1.0).expect("finite value");
+        let t_root = match set
+            .scan_step(0.0, 0.5, &0.5, |w| Ok(1.0 - w))
+            .expect("located")
+        {
+            StepRoots::Found { t, state, .. } => {
+                assert_eq!(state, 0.5, "the step lands on the level exactly");
+                commit(&mut set, t, &state);
+                t
+            }
+            StepRoots::None => panic!("the fall reaches 0.5"),
+        };
+        assert_eq!(set.guard(0).at(), Some(t_root));
+
+        // The caller puts the value back above the level, at the same time, and
+        // it falls through again. That is a crossing.
+        set.begin(t_root, &1.0).expect("finite value");
+        assert!(matches!(
+            set.scan_step(t_root, 1.0, &0.0, |w| Ok(1.0 - w))
                 .expect("no error"),
             StepRoots::Found { .. }
         ));

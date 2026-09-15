@@ -160,6 +160,67 @@ impl Scalar for Clamped {
     }
 }
 
+/// A state whose projection turns non-finite once it is past a level, for the
+/// case where the walk has to refuse the state it just projected.
+#[derive(Clone, Debug, PartialEq)]
+struct Breaking {
+    y: f64,
+}
+
+impl OdeState for Breaking {
+    fn zero_like(&self) -> Self {
+        Self { y: 0.0 }
+    }
+    fn axpy(&self, scale: f64, other: &Self) -> Self {
+        Self {
+            y: self.y + scale * other.y,
+        }
+    }
+    fn scale(&self, factor: f64) -> Self {
+        Self { y: self.y * factor }
+    }
+    fn is_finite(&self) -> bool {
+        self.y.is_finite()
+    }
+    fn error_norm(&self, y_next: &Self, error: &Self, tol: &Tolerances) -> f64 {
+        let sc = tol.atol + tol.rtol * self.y.abs().max(y_next.y.abs());
+        (error.y / sc).abs()
+    }
+    fn project(&mut self, _t: f64) -> Projection {
+        if self.y > CLAMPED_LEVEL {
+            self.y = f64::INFINITY;
+            Projection::Changed
+        } else {
+            Projection::Unchanged
+        }
+    }
+}
+
+impl Scalar for Breaking {
+    fn scalar(&self) -> f64 {
+        self.y
+    }
+}
+
+/// `dy/dt = 1` on a state whose projection breaks past the level.
+struct Broken;
+
+impl DynamicalSystem for Broken {
+    type State = Breaking;
+    fn derivatives(&self, _t: f64, _state: &Self::State) -> Self::State {
+        Breaking { y: 1.0 }
+    }
+}
+
+impl RootEvent<Breaking> for ClampedLevel {
+    fn value(&self, _t: f64, y: &Breaking) -> f64 {
+        y.y - self.level
+    }
+    fn crossing(&self) -> Crossing {
+        Crossing::Rising
+    }
+}
+
 /// `dy/dt = 1`, so `y = t` and a level is crossed at the level itself.
 struct Unit {
     ceiling: f64,
@@ -811,6 +872,36 @@ contract_for!(dp45, dp45_walker());
 contract_for!(dop853, dop853_walker());
 
 /// The cases that need a state whose projection is observable.
+/// A projection that makes the state itself non-finite fails the walk without
+/// leaving the located root in `hits`.
+///
+/// The stepper refuses such a state before it asks the events for their values,
+/// so the path that drops the hits inside `check` is not the one taken here.
+fn case_a_projection_that_breaks_the_state_leaves_no_hits<W: Walker<Sys = Broken>>(
+    label: &str,
+    mut walker: W,
+) {
+    let event = ClampedLevel {
+        level: CLAMPED_LEVEL,
+    };
+    let mut roots =
+        RootSet::new([&event as &dyn RootEvent<Breaking>], SEARCH).expect("valid search");
+    let mut reported = Vec::new();
+
+    let err = walker
+        .advance(1.0, &mut reported, &mut roots)
+        .expect_err("the projection produces a state the walk refuses");
+    assert!(
+        matches!(err, IntegrationError::NonFiniteState { .. }),
+        "{label}: {err:?}"
+    );
+    assert!(
+        roots.hits().is_empty(),
+        "{label}: the root the walk gave up on stays out of hits(): {:?}",
+        roots.hits()
+    );
+}
+
 macro_rules! projection_contract_for {
     ($solver:ident, $walker:expr) => {
         mod $solver {
@@ -867,6 +958,44 @@ fn dp45_clamped() -> AdaptiveStepper<'static, Unit> {
 fn dop853_clamped() -> AdaptiveStepper853<'static, Unit> {
     DOP853.stepper(&CLAMPED, clamped_start(), T0, DT, Tolerances::default())
 }
+
+macro_rules! broken_contract_for {
+    ($solver:ident, $walker:expr) => {
+        mod $solver {
+            use super::*;
+
+            #[test]
+            fn a_projection_that_breaks_the_state_leaves_no_hits() {
+                case_a_projection_that_breaks_the_state_leaves_no_hits(
+                    stringify!($solver),
+                    $walker,
+                );
+            }
+        }
+    };
+}
+
+static BROKEN: Broken = Broken;
+
+fn broken_start() -> Breaking {
+    Breaking { y: 0.0 }
+}
+
+fn rk4_broken() -> FixedStepper<'static, Rk4, Broken> {
+    RK4.stepper(&BROKEN, broken_start(), T0, DT)
+}
+
+fn dp45_broken() -> AdaptiveStepper<'static, Broken> {
+    DP45.stepper(&BROKEN, broken_start(), T0, DT, Tolerances::default())
+}
+
+fn dop853_broken() -> AdaptiveStepper853<'static, Broken> {
+    DOP853.stepper(&BROKEN, broken_start(), T0, DT, Tolerances::default())
+}
+
+broken_contract_for!(rk4_broken_projection, rk4_broken());
+broken_contract_for!(dp45_broken_projection, dp45_broken());
+broken_contract_for!(dop853_broken_projection, dop853_broken());
 
 projection_contract_for!(rk4_projected, rk4_clamped());
 projection_contract_for!(dp45_projected, dp45_clamped());

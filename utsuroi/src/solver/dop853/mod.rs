@@ -413,9 +413,11 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper853<'a, S> {
     /// `roots` are what keep that step from reporting the departure as a new
     /// crossing, so the same set has to be passed back.
     ///
-    /// The events are asked nothing about the state the stepper starts from.
-    /// Detection needs a sign change, and a state sitting exactly on a boundary
-    /// is also what the previous root left behind.
+    /// A value that is already zero at the state the stepper starts from is not
+    /// a root. Detection needs a sign change, and a state sitting exactly on a
+    /// boundary is also what the previous root left behind. The values there are
+    /// read — they are the "before" of the first step — and none of them is
+    /// reported.
     pub fn advance_to_roots<F, const N: usize>(
         &mut self,
         t_target: f64,
@@ -504,6 +506,7 @@ impl<'a, S: DynamicalSystem> AdaptiveStepper853<'a, S> {
                 // state.
                 let _ = y.project(t_committed);
                 if !y.is_finite() {
+                    roots.discard_hits();
                     return Err(IntegrationError::NonFiniteState { t: t_committed });
                 }
                 // Read before the stepper moves: a projection can put a root
