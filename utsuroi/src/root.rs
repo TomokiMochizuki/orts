@@ -155,7 +155,8 @@ pub trait RootEvent<Y> {
 ///   behind. A step that starts at that time with the value still on that side
 ///   is the one leaving the root, and it does not report the same event again.
 ///   Both comparisons are exact and need no tolerance. A caller that moves the
-///   value to the other side of zero, and clear of the event's
+///   value to a different side from the one left there — or to either side,
+///   where the root landed exactly on zero — and clear of the event's
 ///   [`boundary_tolerance`](RootEvent::boundary_tolerance), has moved the state
 ///   off that root, so the step it then takes reports a crossing as any other
 ///   would.
