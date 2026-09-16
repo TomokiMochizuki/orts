@@ -1047,6 +1047,15 @@ section is subdivided by package.
   Non-degenerate orbits are unchanged. ([#359](https://github.com/sksat/orts/pull/359))
 
 #### Fixed
+- `Finals2000A::parse` (and so `EopTable::from_finals2000a` / `fetch`) reads
+  the published `finals2000A.all`. The file ends with about fifty dated rows,
+  padded to full width, whose EOP columns are all blank; the parser read the
+  first of them as a malformed `xp_A` and failed the whole file, so `--eop
+  auto` failed right after a successful download while the trimmed test
+  fixture passed. Rows with every Bulletin A value blank are now skipped as
+  the end of the series; a row with only some of them blank is still an
+  error. Pinned by a fixture cut from the real tail.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `tle::parse` refuses input carrying more than the one element set it returns,
   as the new `TleParseError::TrailingLines`. It read the first record and
   dropped the rest without saying so, and no check looked past the second line:

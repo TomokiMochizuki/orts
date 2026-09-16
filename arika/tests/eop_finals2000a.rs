@@ -8,6 +8,10 @@ use arika::earth::eop::{
 };
 
 const SAMPLE: &str = include_str!("fixtures/finals2000A.sample");
+/// The last ten rows of the published `finals2000A.all` (fetched 2026-09-16):
+/// four prediction rows with values, then six of the padded blank rows the
+/// file ends with — dated, full width, every EOP column empty.
+const UNTRIMMED_TAIL: &str = include_str!("fixtures/finals2000A.untrimmed.sample");
 
 // Parser tests
 
@@ -87,6 +91,40 @@ fn parse_2024_03_20_values() {
         (entry.dx.unwrap() - 0.378).abs() < 0.01,
         "dX should be B value 0.378 mas, got {}",
         entry.dx.unwrap()
+    );
+}
+
+/// `--eop auto` downloads the whole `finals2000A.all`, whose tail is dated
+/// rows with no values. Those are the end of the series, not malformed data,
+/// so they are skipped; the four valued rows before them come through. (The
+/// trimmed `finals2000A.sample` never exercised this, which is how the
+/// download-then-parse path could fail while every test passed.)
+#[test]
+fn parse_skips_the_blank_tail_of_the_published_file() {
+    let entries = Finals2000A::parse(UNTRIMMED_TAIL).expect("the real tail parses");
+    assert_eq!(entries.len(), 4, "the six blank rows are not entries");
+    assert_eq!(entries.last().unwrap().mjd, 61666.0);
+    // Through the table as well, which is the path `EopTable::fetch` takes.
+    let table = EopTable::from_finals2000a(UNTRIMMED_TAIL).expect("table builds");
+    assert_eq!(table.mjd_range(), (61663.0, 61666.0));
+}
+
+/// A row with *some* of the required Bulletin A values blank is not the tail:
+/// it is a malformed row and still an error, naming the column.
+#[test]
+fn parse_rejects_a_row_with_only_some_required_values_blank() {
+    let valued = UNTRIMMED_TAIL.lines().next().unwrap();
+    // Blank out x pole (cols 18-27, 1-indexed) and keep the rest.
+    let mut bytes = valued.as_bytes().to_vec();
+    bytes[17..27].fill(b' ');
+    let broken = String::from_utf8(bytes).unwrap();
+    let err = Finals2000A::parse(&broken).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            arika::earth::eop::EopParseError::InvalidNumber { column: "xp_A", .. }
+        ),
+        "{err:?}"
     );
 }
 

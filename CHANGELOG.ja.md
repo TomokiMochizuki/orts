@@ -881,6 +881,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   落としていた mantissa の半分を回復した。非退化な軌道の値は変わらない。([#359](https://github.com/sksat/orts/pull/359))
 
 #### Fixed
+- `Finals2000A::parse` (したがって `EopTable::from_finals2000a` / `fetch`) が配布
+  されている `finals2000A.all` を読めるようにした。ファイル末尾には日付だけあって
+  EOP 列がすべて空の行が約 50 行 (全幅に空白詰め) 並んでおり、parser はその最初の
+  行を `xp_A` の不正な数値として全体を失敗させていた。そのため `--eop auto` は
+  download 成功直後に失敗し、切り詰めた test fixture では見えなかった。Bulletin A
+  の必須値がすべて空の行は系列の終端として skip し、一部だけ空の行は従来どおり
+  エラー。実ファイルの末尾から切り出した fixture で固定。
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `tle::parse` が、1 衛星ぶんより多くの行を含む入力を拒否するようになった
   (新しい `TleParseError::TrailingLines`)。従来は先頭のレコードを読んで残りを黙って捨てて
   いた。checksum は行ごとの mod-10 なので読んだ 2 行だけで成立し、catalog number の一致検査も
