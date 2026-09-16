@@ -2572,7 +2572,7 @@ mod tests {
     #[test]
     fn visibility_monitors_are_built_in_the_propagation_frame() {
         let cfg: crate::config::SimConfig = toml::from_str(&format!(
-            "frame = \"gcrs\"\neop = \"{}\"\nepoch = \"2024-03-20T12:00:00Z\"\n\
+            "frame = \"gcrs\"\neop = '{}'\nepoch = \"2024-03-20T12:00:00Z\"\n\
              \n[[ground_station]]\nname = \"tsukuba\"\nlatitude_deg = 36.06\n\
              longitude_deg = 140.13\naltitude_km = 0.03\n\
              \n[[satellites]]\nid = \"a\"\n\

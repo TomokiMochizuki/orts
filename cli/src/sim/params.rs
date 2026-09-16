@@ -1599,7 +1599,7 @@ orbit = { type = "circular", altitude = 570 }
     #[test]
     fn eop_storage_follows_the_frame() {
         let cfg: SimConfig = toml::from_str(&format!(
-            "frame = \"gcrs\"\neop = \"{EOP_FIXTURE}\"\nepoch = \"2024-03-20T12:00:00Z\"\n\
+            "frame = \"gcrs\"\neop = '{EOP_FIXTURE}'\nepoch = \"2024-03-20T12:00:00Z\"\n\
              \n[[satellites]]\nid = \"a\"\norbit = {{ type = \"circular\", altitude = 570 }}\n"
         ))
         .expect("valid toml");

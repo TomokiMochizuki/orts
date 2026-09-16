@@ -902,7 +902,7 @@ orbit = {{ type = "circular", altitude = 570, inclination = 97.6, raan = 40 }}
 fn test_frame_gcrs_runs_and_differs_from_simple_eci() {
     let gcrs = run_config(
         "frame-gcrs",
-        &one_orbit_config(&format!("frame = \"gcrs\"\neop = \"{EOP_FIXTURE}\"")),
+        &one_orbit_config(&format!("frame = \"gcrs\"\neop = '{EOP_FIXTURE}'")),
     );
     let stderr = String::from_utf8_lossy(&gcrs.stderr);
     assert!(gcrs.status.success(), "gcrs run failed: {stderr}");
