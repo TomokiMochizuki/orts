@@ -97,8 +97,8 @@ fn acceleration_and_potential_match_orekit_pointwise() {
         for point in &set.points {
             let pos = Vector3::from(point.position_km);
             let want_a = Vector3::from(point.acceleration_km_s2);
-            let got_a = field.acceleration_ecef(&pos);
-            let got_u = field.potential_ecef(&pos);
+            let got_a = field.acceleration_body_fixed(&pos);
+            let got_u = field.potential_body_fixed(&pos);
             let r = pos.norm();
             let (scale_a, scale_u) = (field.gm() / (r * r), field.gm() / r);
             let da = (got_a - want_a).norm();

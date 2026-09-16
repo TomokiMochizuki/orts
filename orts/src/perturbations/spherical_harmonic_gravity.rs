@@ -83,7 +83,7 @@ impl<F: EarthFixedTransform> SphericalHarmonicGravity<F> {
         let pos_fixed = fixed_to_inertial
             .inverse()
             .transform(&Vec3::<F>::from_raw(*position));
-        let a_fixed = self.field.acceleration_ecef(&pos_fixed.into_inner());
+        let a_fixed = self.field.acceleration_body_fixed(&pos_fixed.into_inner());
         fixed_to_inertial
             .transform(&Vec3::<F::Fixed>::from_raw(a_fixed))
             .into_inner()

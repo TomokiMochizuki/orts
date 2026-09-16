@@ -24,7 +24,8 @@
 //! 1 vanishes for a geocentric field, so the sums start at `n = 2`. This is
 //! the same split Orekit's `HolmesFeatherstoneAttractionModel` makes.
 //!
-//! The evaluator is frame-agnostic: it takes a body-fixed (ECEF) position in
+//! The evaluator is frame-agnostic: it takes a body-fixed position (ITRS,
+//! TIRS or the simple ECEF — whichever the caller rotates into) in
 //! km and returns km/s². Rotating the propagation state into the body frame
 //! and back is the caller's job (orts: `SphericalHarmonicGravity<F>`).
 //!
@@ -440,7 +441,7 @@ impl SphericalHarmonicField {
 
     /// Non-central disturbing potential `U` \[km²/s²\] at a body-fixed
     /// position \[km\]. `a = ∇U`.
-    pub fn potential_ecef(&self, position: &Vector3<f64>) -> f64 {
+    pub fn potential_body_fixed(&self, position: &Vector3<f64>) -> f64 {
         self.evaluate(position).0
     }
 
@@ -448,7 +449,7 @@ impl SphericalHarmonicField {
     ///
     /// Non-finite or zero positions propagate to a non-finite result rather
     /// than being masked.
-    pub fn acceleration_ecef(&self, position: &Vector3<f64>) -> Vector3<f64> {
+    pub fn acceleration_body_fixed(&self, position: &Vector3<f64>) -> Vector3<f64> {
         self.evaluate(position).1
     }
 
@@ -674,8 +675,8 @@ mod tests {
             let field = single(n, m, c, s);
             for pos in sample_positions() {
                 let (u_want, a_want) = closed_form(n, m, c, s, &pos);
-                let u_got = field.potential_ecef(&pos);
-                let a_got = field.acceleration_ecef(&pos);
+                let u_got = field.potential_body_fixed(&pos);
+                let a_got = field.acceleration_body_fixed(&pos);
                 // Scale: the point-mass acceleration / potential at r, so a
                 // vanishing term (e.g. C̄22 at the pole) does not blow up a
                 // relative tolerance.
@@ -700,7 +701,7 @@ mod tests {
     fn c21_gives_finite_horizontal_acceleration_at_the_pole() {
         let field = single(2, 1, 1e-6, 0.0);
         let r = 7000.0;
-        let a = field.acceleration_ecef(&Vector3::new(0.0, 0.0, r));
+        let a = field.acceleration_body_fixed(&Vector3::new(0.0, 0.0, r));
         // ∇(√15 GM a² C x z / r⁵) at (0,0,r) = (√15 GM a² C / r⁴, 0, 0)
         let want = 15.0f64.sqrt() * GM * A * A * 1e-6 / r.powi(4);
         assert!(a.iter().all(|v| v.is_finite()), "{a:?}");
@@ -748,14 +749,15 @@ mod tests {
     fn acceleration_is_gradient_of_potential() {
         let field = synthetic_field(12, 12);
         for pos in sample_positions() {
-            let a = field.acceleration_ecef(&pos);
+            let a = field.acceleration_body_fixed(&pos);
             let mut errs = Vec::new();
             for h in [1e-2, 1e-3] {
                 let mut fd = Vector3::zeros();
                 for k in 0..3 {
                     let mut dp = Vector3::zeros();
                     dp[k] = h;
-                    fd[k] = (field.potential_ecef(&(pos + dp)) - field.potential_ecef(&(pos - dp)))
+                    fd[k] = (field.potential_body_fixed(&(pos + dp))
+                        - field.potential_body_fixed(&(pos - dp)))
                         / (2.0 * h);
                 }
                 errs.push((fd - a).norm());
@@ -774,12 +776,12 @@ mod tests {
     fn pole_is_the_limit_of_nearby_points() {
         let field = synthetic_field(20, 20);
         for z in [7000.0, -7000.0] {
-            let at_pole = field.acceleration_ecef(&Vector3::new(0.0, 0.0, z));
+            let at_pole = field.acceleration_body_fixed(&Vector3::new(0.0, 0.0, z));
             assert!(at_pole.iter().all(|v| v.is_finite()));
             for az in [0.0f64, 1.0, 2.5, 4.0] {
                 let eps = 1e-6; // km
                 let near = Vector3::new(eps * az.cos(), eps * az.sin(), z);
-                let a_near = field.acceleration_ecef(&near);
+                let a_near = field.acceleration_body_fixed(&near);
                 assert_close(
                     &a_near,
                     &at_pole,
@@ -799,9 +801,9 @@ mod tests {
             Vector3::new(7000.0, f64::INFINITY, 0.0),
             Vector3::zeros(),
         ] {
-            let a = field.acceleration_ecef(&pos);
+            let a = field.acceleration_body_fixed(&pos);
             assert!(!a.iter().all(|v| v.is_finite()), "{pos:?} → {a:?}");
-            assert!(!field.potential_ecef(&pos).is_finite());
+            assert!(!field.potential_body_fixed(&pos).is_finite());
         }
     }
 
@@ -821,10 +823,10 @@ mod tests {
         }
         let zeroed = field_from(10, &kept);
         for pos in sample_positions() {
-            let a = truncated.acceleration_ecef(&pos);
+            let a = truncated.acceleration_body_fixed(&pos);
             assert_close(
                 &a,
-                &zeroed.acceleration_ecef(&pos),
+                &zeroed.acceleration_body_fixed(&pos),
                 1e-14,
                 a.norm(),
                 "truncation",
@@ -871,10 +873,10 @@ mod tests {
         }
         let explicit = field_from(6, &zonal_coeffs);
         for pos in sample_positions() {
-            let a = zonal.acceleration_ecef(&pos);
+            let a = zonal.acceleration_body_fixed(&pos);
             assert_close(
                 &a,
-                &explicit.acceleration_ecef(&pos),
+                &explicit.acceleration_body_fixed(&pos),
                 1e-14,
                 a.norm(),
                 "zonal",
@@ -986,8 +988,8 @@ gfc 2 2 2.4e-6 -1.4e-6
             let rotated = rotated_coefficients(&field, delta);
             let (sd, cd) = delta.sin_cos();
             let rot = nalgebra::Matrix3::new(cd, -sd, 0.0, sd, cd, 0.0, 0.0, 0.0, 1.0);
-            let want = rot * field.acceleration_ecef(&pos);
-            let got = rotated.acceleration_ecef(&(rot * pos));
+            let want = rot * field.acceleration_body_fixed(&pos);
+            let got = rotated.acceleration_body_fixed(&(rot * pos));
             let scale = want.norm();
             prop_assert!((got - want).norm() <= 1e-11 * scale, "got {got:?} want {want:?}");
         }
@@ -1009,9 +1011,9 @@ gfc 2 2 2.4e-6 -1.4e-6
                 }
             }
             let scaled = field_from(6, &scaled);
-            let base = field.acceleration_ecef(&pos);
+            let base = field.acceleration_body_fixed(&pos);
             let want = alpha * base;
-            let got = scaled.acceleration_ecef(&pos);
+            let got = scaled.acceleration_body_fixed(&pos);
             prop_assert!((got - want).norm() <= 1e-12 * base.norm() * alpha.abs().max(1.0));
         }
     }
