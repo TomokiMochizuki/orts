@@ -61,6 +61,11 @@ jobs:
       - name: Clippy (tobari no_std)
         run: cargo clippy --locked -p tobari --no-default-features -- -D warnings
 
+      # no_std + alloc → + the `gravity` module (ICGEM parser + evaluator),
+      # which the no-alloc check above never compiles.
+      - name: Clippy (tobari no_std + alloc)
+        run: cargo clippy --locked -p tobari --no-default-features --features alloc -- -D warnings
+
       # Contract checks: `arika` must compile at each feature tier.
       #   no_std, no alloc → pure math core only
       #   no_std + alloc   → + horizons, EopTable, HorizonsMoonEphemeris

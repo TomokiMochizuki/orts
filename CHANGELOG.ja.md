@@ -62,6 +62,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `InterSatelliteForce::acceleration_pair_in_segment` を追加 (既定は stage 時刻版への転送)。
   どちらも境界を報告できるので、segment のあいだ保持すべき schedule を持ちうる。衛星間力の
   引数が `SegmentContext` なのは、`PairContext` が epoch を運ばないため。([#453](https://github.com/sksat/orts/pull/453))
+- `perturbations::SphericalHarmonicGravity<F: EarthFixedTransform>` —
+  `tobari::gravity::SphericalHarmonicField` (EGM96 / EGM2008 / EIGEN 系の ICGEM
+  file から読んだ `SphericalHarmonicCoefficients` の degree × order 窓) による
+  完全球面調和重力。`F` の地球固定 chain で回す: `SimpleEci` は ERA
+  のみ、`Gcrs` は極運動込みの IAU 2006 CIO chain。非中心項のみ (`PointMass` と
+  併用し、`ZonalGravity` とは同時に登録しない)。絶対 epoch が無い場合は J2000 への
+  fallback ではなく panic。70×70 で 24 h の LEO 伝播が Orekit (ITRF body frame,
+  実 EOP) と 0.93 m で一致。([#411](https://github.com/sksat/orts/issues/411))
 - 地上局コンタクトウィンドウ検出 (`visibility` module): `GroundStation`
   (WGS-84 位置 + 仰角マスク)、`ContactWindow` (補間した AOS/LOS、最大仰角、
   span クリップフラグ)、純粋な `PassTracker` ステートマシン、frame-aware な
@@ -1034,6 +1042,26 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `tobari` (Rust, crates.io)
 
 #### Added
+- `gravity::SphericalHarmonicCoefficients`: 静的 ICGEM `.gfc` parser (fully normalized
+  な `gfc` record のみ。時変 record `gfct`/`trnd`/`dot`/`asin`/`acos` と
+  `unnormalized` は明示エラーで拒否。`errors` の列数、`m ≤ n`、重複、非有限値、
+  `C00 = 1`、degree-1 がゼロであること、係数の完備性を検証。`norm` は必須、
+  header key の二重宣言はエラー、`max_degree` は `gravity::MAX_DEGREE` = 2190
+  が上限)。`from_icgem(text, max_degree)`, `from_icgem_reader(BufRead,
+  max_degree)`, `from_icgem_file(path, max_degree)` は任意の degree 上限を取り、
+  その三角が揃った行で読み止めるので、degree 2190 の EGM2008 file に 70×70 を
+  要求しても 70×70 分しか確保しない。file が持たない degree の要求は
+  `IcgemParseError::DegreeUnavailable`。accessor は `gm()`, `radius()`,
+  `tide_system()` (記録のみ、変換しない), `coefficient(n, m)`) と、
+  `gravity::SphericalHarmonicField`: 一つの係数集合 (`Arc` で共有) の
+  degree × order 窓に対する body frame での非中心 potential / 加速度の
+  Holmes–Featherstone 評価器 (km 単位)。`new(coefficients, degree, order)` /
+  `full` / `truncated` は係数集合が提供できない窓に対して clamp せず
+  `TruncationError` を返す。Orekit の `HolmesFeatherstoneAttractionModel` と
+  同じ構造だが極そのものでも正則。70×70 まで Orekit と点ごとに 1e-13·GM/r² で一致
+  (`tests/oracle_geopotential.rs`、fixture は
+  `tools/generate_orekit_geopotential_fixtures.py`)。
+  ([#411](https://github.com/sksat/orts/issues/411))
 - NRLMSISE-00 の 72.5 km 未満: 中間圏・成層圏・対流圏の温度 spline と完全混合への
   線形遷移を実装し、地表から ~1000 km までをカバーするようになった。従来はそれ未満の
   すべての高度に 72.5 km の profile を黙って返していた (海面で 1.9e4 倍薄い)。

@@ -11,6 +11,14 @@
 //! All models implement [`AtmosphereModel`] and can be swapped at runtime via
 //! `Box<dyn AtmosphereModel>`.
 //!
+//! ## Gravity field
+//!
+//! [`gravity::SphericalHarmonicCoefficients`] loads a fully normalized
+//! spherical-harmonic geopotential (EGM96 / EGM2008 / EIGEN-class ICGEM
+//! files) and [`gravity::SphericalHarmonicField`] evaluates a `degree × order`
+//! window of it in its body-fixed frame — the non-central part only, for use
+//! next to a point-mass term.
+//!
 //! ## Magnetic field
 //!
 //! Provides pluggable geomagnetic field models behind the
@@ -39,19 +47,31 @@ extern crate alloc;
 
 mod math;
 
-#[cfg(feature = "alloc")]
+// `cssi` / `gfz` read files and use `std::error::Error` / `HashSet`, so they
+// are std-only; `gravity` needs only `alloc` (the `.gfc` text parser and the
+// coefficient arrays) and is checked at that tier in CI.
+#[cfg(feature = "std")]
 pub mod cssi;
 pub mod exponential;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub mod gfz;
+#[cfg(feature = "alloc")]
+pub mod gravity;
 pub mod harris_priester;
 pub mod magnetic;
 pub mod nrlmsise00;
 pub mod space_weather;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub use cssi::{CssiData, CssiSpaceWeather, OutOfRangeBehavior};
 pub use exponential::Exponential;
+#[cfg(feature = "std")]
+pub use gravity::IcgemFileError;
+#[cfg(feature = "alloc")]
+pub use gravity::{
+    CoefficientError, IcgemParseError, SphericalHarmonicCoefficients, SphericalHarmonicField,
+    TideSystem, TruncationError,
+};
 pub use harris_priester::HarrisPriester;
 pub use nrlmsise00::Nrlmsise00;
 pub use space_weather::{ConstantWeather, SpaceWeather, SpaceWeatherProvider};
