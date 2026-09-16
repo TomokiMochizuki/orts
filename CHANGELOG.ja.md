@@ -94,6 +94,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   provider を持てるよう EOP storage を factory で受ける。`HasPosition` を任意の
   frame の `OrbitalState<F>` に実装し、`record::SimMetadata` に frame 名を追加。
   ([#411](https://github.com/sksat/orts/issues/411))
+- **BREAKING**: `setup::build_orbital_system` / `build_orbital_system_in_frame` /
+  `build_spacecraft_dynamics` が、別々の `mu` と `gravity_field` 引数の代わりに
+  `setup::CentralGravity` (`Zonal { mu }` または `Harmonic(field)`) を受ける。
+  中心項の GM の出所が一つ (`CentralGravity::mu()`、`Harmonic` では場自身の GM) に
+  なるので場の GM と食い違えず、zonal / harmonic の排他は builder 内のチェックではなく
+  variant で表される。([#411](https://github.com/sksat/orts/issues/411))
+
 
 #### Changed
 - `IndependentGroup` と `CoupledGroup` が、どの solver も同じ 3 つの呼び出し

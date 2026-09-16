@@ -606,12 +606,11 @@ fn run_simulation_in_frame<F: RunFrame>(params: &SimParams) -> Result<Recording,
     for sat in &params.satellites {
         let system = build_orbital_system_in_frame::<F>(
             &params.body,
-            params.mu,
+            params.central_gravity(),
             params.epoch,
             &sat_params(sat),
             &third_bodies,
             params.build_atmosphere_model(),
-            params.gravity_field(),
             || params.eop_storage::<F>(),
         )
         .map_err(|e| CmdError::failure(format!("solar force models: {e}")))?;
@@ -2420,7 +2419,7 @@ mod tests {
         let inertia = nalgebra::Matrix3::from_diagonal(&nalgebra::Vector3::new(10.0, 40.0, 45.0));
         let dynamics = orts::setup::build_spacecraft_dynamics(
             &body,
-            mu,
+            orts::setup::CentralGravity::Zonal { mu: mu },
             None,
             &orts::setup::SatelliteParams {
                 has_drag: false,
@@ -2432,8 +2431,6 @@ mod tests {
             },
             &[],
             inertia,
-            None,
-            // No spherical-harmonic field: these fixtures are the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");

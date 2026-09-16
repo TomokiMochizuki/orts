@@ -247,10 +247,15 @@ impl SimParams {
         }
     }
 
-    /// The gravity field to hand to `orts::setup`, if one is configured
-    /// (a cheap `Arc` clone: the coefficients are shared, not copied).
-    pub fn gravity_field(&self) -> Option<Arc<tobari::gravity::SphericalHarmonicField>> {
-        self.gravity_field.clone()
+    /// The central body's gravity as `orts::setup` takes it: the point-mass GM
+    /// and the oblateness model in one value, so the two cannot disagree.
+    /// `mu` stays on `SimParams` for everything that only needs the number
+    /// (initial states, metadata); `resolve_mu` keeps it equal to this GM.
+    pub fn central_gravity(&self) -> orts::setup::CentralGravity {
+        match &self.gravity_field {
+            Some(field) => orts::setup::CentralGravity::Harmonic(Arc::clone(field)),
+            None => orts::setup::CentralGravity::Zonal { mu: self.mu },
+        }
     }
 
     /// Build an atmosphere model from the current parameters.

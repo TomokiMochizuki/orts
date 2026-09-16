@@ -60,6 +60,41 @@ pub struct SatelliteParams {
     pub shape: Option<SpacecraftShape>,
 }
 
+/// The central body's gravity as one value: where the point-mass GM comes
+/// from and which oblateness model rides on top of it.
+///
+/// The two are one model. A spherical-harmonic field carries its own GM, and
+/// its degree ≥ 2 terms are the oblateness; taking `mu` and the field as two
+/// arguments let them disagree (WGS-84's 398600.4418 next to EGM2008's
+/// 398600.4415 — 7.5e-10, ~0.3 m/day along-track at LEO), which the builders
+/// then had to assert against. Here `mu` has one source, [`mu`](Self::mu),
+/// and the zonal / harmonic exclusivity is a variant rather than an `if`.
+#[derive(Clone)]
+pub enum CentralGravity {
+    /// A point mass at `mu` plus the body's J2/J3/J4 ([`ZonalGravity`]) when
+    /// it has them.
+    Zonal {
+        /// Gravitational parameter \[km³/s²\].
+        mu: f64,
+    },
+    /// A point mass at the field's own GM plus the field's degree ≥ 2 terms
+    /// ([`SphericalHarmonicGravity`]). Earth only, and needs an absolute
+    /// epoch — see [`check_gravity_field_preconditions`].
+    Harmonic(Arc<SphericalHarmonicField>),
+}
+
+impl CentralGravity {
+    /// The point-mass gravitational parameter \[km³/s²\]: `mu` for
+    /// [`Zonal`](Self::Zonal), the field's GM for
+    /// [`Harmonic`](Self::Harmonic).
+    pub fn mu(&self) -> f64 {
+        match self {
+            Self::Zonal { mu } => *mu,
+            Self::Harmonic(field) => field.gm(),
+        }
+    }
+}
+
 /// Central (point-mass) gravity field. Oblateness is added separately as a
 /// [`ZonalGravity`] perturbation via [`build_zonal_gravity`], because the zonal
 /// terms depend on the rotation-pole orientation in the integration frame and
@@ -96,15 +131,11 @@ fn build_zonal_gravity<F: arika::earth::EarthRotationPole>(
 /// - An absolute epoch is required: the longitude-dependent terms have no
 ///   value without Earth's rotation angle (`SphericalHarmonicGravity::eval`
 ///   panics without one).
-/// - `mu` must be the field's own GM: the point-mass term and the harmonic
-///   terms are one model, so two GMs must not be mixed (DESIGN.md 設計規約;
-///   WGS-84 vs EGM2008 is 7.5e-10, ~0.3 m/day along-track at LEO).
-fn check_gravity_field_preconditions(
-    body: &KnownBody,
-    mu: f64,
-    epoch: Option<Epoch>,
-    field: &SphericalHarmonicField,
-) {
+///
+/// The third precondition the field used to carry — that the point-mass `mu`
+/// is the field's own GM — is no longer checkable because it is no longer
+/// expressible: [`CentralGravity::Harmonic`] takes the GM from the field.
+fn check_gravity_field_preconditions(body: &KnownBody, epoch: Option<Epoch>) {
     assert!(
         *body == KnownBody::Earth,
         "a spherical-harmonic gravity field is Earth-only (the Earth-fixed transform \
@@ -114,15 +145,6 @@ fn check_gravity_field_preconditions(
         epoch.is_some(),
         "a spherical-harmonic gravity field needs an absolute epoch: its longitude-dependent \
          terms are fixed to the rotating Earth"
-    );
-    // Relative 1e-12: the CLI copies `field.gm()` into `mu` bit-for-bit; the
-    // slack only absorbs a caller that round-tripped it through text, while
-    // still catching the 7.5e-10 WGS-84-vs-EGM2008 mix-up.
-    assert!(
-        (mu - field.gm()).abs() <= 1e-12 * field.gm(),
-        "mu = {mu} km³/s² differs from the gravity field's GM = {} km³/s²: use the field's GM \
-         for the point-mass term (the point mass and the harmonics are one model)",
-        field.gm()
     );
 }
 
@@ -179,28 +201,27 @@ fn build_srp(
 /// If `atmosphere` is provided and drag is enabled for Earth, it will be used as the
 /// atmospheric density model. If `None`, the default exponential model is used.
 ///
-/// `gravity_field` selects the oblateness model: `Some` installs the full
-/// spherical-harmonic field ([`SphericalHarmonicGravity`], Earth only, needs
-/// `epoch`, and `mu` must be the field's GM — see
-/// [`check_gravity_field_preconditions`]); `None` installs the body's J2/J3/J4
-/// [`ZonalGravity`]. Never both: each contains J2.
+/// `gravity` is the point-mass GM and the oblateness model in one value:
+/// [`CentralGravity::Harmonic`] installs the full spherical-harmonic field
+/// ([`SphericalHarmonicGravity`], Earth only, needs `epoch` — see
+/// [`check_gravity_field_preconditions`]) at the field's own GM;
+/// [`CentralGravity::Zonal`] installs the body's J2/J3/J4 [`ZonalGravity`].
+/// Never both: each contains J2.
 pub fn build_orbital_system(
     body: &KnownBody,
-    mu: f64,
+    gravity: CentralGravity,
     epoch: Option<Epoch>,
     sat: &SatelliteParams,
     third_bodies: &[ThirdBodyGravity],
     atmosphere: Option<Box<dyn tobari::AtmosphereModel>>,
-    gravity_field: Option<Arc<SphericalHarmonicField>>,
 ) -> Result<OrbitalSystem, SunPositionError> {
     build_orbital_system_in_frame::<frame::SimpleEci>(
         body,
-        mu,
+        gravity,
         epoch,
         sat,
         third_bodies,
         atmosphere,
-        gravity_field,
         || (),
     )
 }
@@ -220,32 +241,29 @@ pub fn build_orbital_system(
 ///
 /// The models installed are exactly the ones [`build_orbital_system`]
 /// installs; only their frame differs.
-// Nine independent knobs of one builder; bundling them into a struct would
-// only move the same nine names one level down.
-#[allow(clippy::too_many_arguments)]
 pub fn build_orbital_system_in_frame<F>(
     body: &KnownBody,
-    mu: f64,
+    gravity: CentralGravity,
     epoch: Option<Epoch>,
     sat: &SatelliteParams,
     third_bodies: &[ThirdBodyGravity],
     atmosphere: Option<Box<dyn tobari::AtmosphereModel>>,
-    gravity_field: Option<Arc<SphericalHarmonicField>>,
     mut eop: impl FnMut() -> F::EopStorage,
 ) -> Result<OrbitalSystem<F>, SunPositionError>
 where
     F: EarthFixedTransform + EphemerisFrameBridge,
 {
     let props = body.properties();
-    let mut system = OrbitalSystem::new(mu, build_gravity_field()).with_body_radius(props.radius);
+    let mut system =
+        OrbitalSystem::new(gravity.mu(), build_gravity_field()).with_body_radius(props.radius);
 
-    // Oblateness: the full spherical-harmonic field when given, else J2/J3/J4.
-    match gravity_field {
-        Some(field) => {
-            check_gravity_field_preconditions(body, mu, epoch, &field);
+    // Oblateness: the full spherical-harmonic field, or the body's J2/J3/J4.
+    match gravity {
+        CentralGravity::Harmonic(field) => {
+            check_gravity_field_preconditions(body, epoch);
             system = system.with_model(SphericalHarmonicGravity::<F>::new(field, eop()));
         }
-        None => {
+        CentralGravity::Zonal { mu } => {
             if let Some(zonal) = build_zonal_gravity::<F>(body, mu) {
                 system = system.with_model(zonal);
             }
@@ -296,22 +314,18 @@ where
 /// points is how the two came to disagree about which models a config gets.
 /// Actuators (RW, MTQ, thrusters) stay with the caller, since which ones a
 /// spacecraft carries comes from its own hardware description.
-// Eight independent knobs of one builder. A `Default`-backed argument struct
-// would let callers name only what they set and make the next model a new
-// field instead of a positional argument at every call site (adding
-// `gravity_field` touched each one: run, serve, sim/core and their tests).
-// TODO: introduce that struct when the next model lands, rather than adding a
-// ninth positional argument.
-#[allow(clippy::too_many_arguments)]
+// TODO: the next model added here should come as a field of a
+// `Default`-backed argument struct rather than an eighth positional argument:
+// callers then name only what they set, and adding a model stops touching
+// every call site (run, serve, sim/core and their tests, as `gravity` did).
 pub fn build_spacecraft_dynamics(
     body: &KnownBody,
-    mu: f64,
+    gravity: CentralGravity,
     epoch: Option<Epoch>,
     sat: &SatelliteParams,
     third_bodies: &[ThirdBodyGravity],
     inertia: Matrix3<f64>,
     atmosphere: Option<Box<dyn tobari::AtmosphereModel>>,
-    gravity_field: Option<Arc<SphericalHarmonicField>>,
 ) -> Result<SpacecraftDynamics<Box<dyn GravityField>>, SunPositionError> {
     let props = body.properties();
     // Panels and the isotropic parameters describe the same two forces, so
@@ -325,17 +339,18 @@ pub fn build_spacecraft_dynamics(
         );
     }
 
+    let mu = gravity.mu();
     let mut system =
         SpacecraftDynamics::new(mu, build_gravity_field(), inertia).with_body_radius(props.radius);
 
-    // Oblateness: the full spherical-harmonic field when given, else J2/J3/J4
+    // Oblateness: the full spherical-harmonic field, or the body's J2/J3/J4
     // (see `build_orbital_system`).
-    match gravity_field {
-        Some(field) => {
-            check_gravity_field_preconditions(body, mu, epoch, &field);
+    match gravity {
+        CentralGravity::Harmonic(field) => {
+            check_gravity_field_preconditions(body, epoch);
             system = system.with_model(SphericalHarmonicGravity::for_simple_eci(field));
         }
-        None => {
+        CentralGravity::Zonal { mu } => {
             if let Some(zonal) = build_zonal_gravity::<frame::SimpleEci>(body, mu) {
                 system = system.with_model(zonal);
             }
@@ -419,8 +434,17 @@ mod tests {
             disturbances: DisturbanceTorques::default(),
             shape: None,
         };
-        let system = build_orbital_system(&body, body.properties().mu, None, &sat, &[], None, None)
-            .expect("no solar models without third bodies");
+        let system = build_orbital_system(
+            &body,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
+            None,
+            &sat,
+            &[],
+            None,
+        )
+        .expect("no solar models without third bodies");
         assert_eq!(system.body_radius, Some(body.properties().radius));
     }
 
@@ -441,12 +465,13 @@ mod tests {
         let body = KnownBody::Earth;
         build_spacecraft_dynamics(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             None,
             &earth_sat(disturbances),
             &[],
             Matrix3::identity(),
-            None,
             None,
         )
         .expect("Earth has a Sun ephemeris")
@@ -490,12 +515,13 @@ mod tests {
         };
         build_spacecraft_dynamics(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(Epoch::from_iso8601("2024-03-20T12:00:00Z").unwrap()),
             &sat,
             &[],
             Matrix3::identity(),
-            None,
             None,
         )
         .expect("Earth has a Sun ephemeris")
@@ -545,12 +571,13 @@ mod tests {
             };
             let system = build_spacecraft_dynamics(
                 &body,
-                body.properties().mu,
+                CentralGravity::Zonal {
+                    mu: body.properties().mu,
+                },
                 Some(epoch),
                 &sat,
                 &[],
                 Matrix3::identity(),
-                None,
                 None,
             )
             .expect("this body has a Sun ephemeris");
@@ -611,12 +638,13 @@ mod tests {
         };
         let system = build_spacecraft_dynamics(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(Epoch::from_iso8601("2024-03-20T12:00:00Z").unwrap()),
             &sat,
             &[],
             Matrix3::identity(),
-            None,
             None,
         )
         .expect("this body has a Sun ephemeris");
@@ -662,11 +690,12 @@ mod tests {
         };
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(Epoch::from_iso8601("2024-03-20T12:00:00Z").unwrap()),
             &sat,
             &[],
-            None,
             None,
         )
         .expect("this body has a Sun ephemeris");
@@ -709,11 +738,12 @@ mod tests {
         let body = KnownBody::Earth;
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             None,
             &earth_sat(DisturbanceTorques::default()),
             &[],
-            None,
             None,
         )
         .expect("this body has a Sun ephemeris");
@@ -731,8 +761,17 @@ mod tests {
             disturbances: DisturbanceTorques::default(),
             shape: None,
         };
-        let system = build_orbital_system(&body, body.properties().mu, None, &sat, &[], None, None)
-            .expect("no solar models without third bodies");
+        let system = build_orbital_system(
+            &body,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
+            None,
+            &sat,
+            &[],
+            None,
+        )
+        .expect("no solar models without third bodies");
         assert!(system.model_names().contains(&"drag"));
     }
 
@@ -747,8 +786,17 @@ mod tests {
             disturbances: DisturbanceTorques::default(),
             shape: None,
         };
-        let system = build_orbital_system(&body, body.properties().mu, None, &sat, &[], None, None)
-            .expect("no solar models without third bodies");
+        let system = build_orbital_system(
+            &body,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
+            None,
+            &sat,
+            &[],
+            None,
+        )
+        .expect("no solar models without third bodies");
         assert!(!system.model_names().contains(&"drag"));
     }
 
@@ -767,11 +815,12 @@ mod tests {
         let third_bodies = default_third_bodies(&body).expect("Earth is supported");
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(epoch),
             &sat,
             &third_bodies,
-            None,
             None,
         )
         .expect("a supported central body");
@@ -795,11 +844,12 @@ mod tests {
         let third_bodies = default_third_bodies(&body).expect("Earth is supported");
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(epoch),
             &sat,
             &third_bodies,
-            None,
             None,
         )
         .expect("a supported central body");
@@ -821,11 +871,12 @@ mod tests {
         // Explicitly pass empty third bodies
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(epoch),
             &sat,
             &[],
-            None,
             None,
         )
         .expect("a supported central body");
@@ -919,11 +970,12 @@ mod tests {
         let third_bodies = default_third_bodies(&body).expect("Mars is supported");
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(epoch),
             &sat,
             &third_bodies,
-            None,
             None,
         )
         .expect("Mars is supported");
@@ -983,11 +1035,12 @@ mod tests {
         let third_bodies = default_third_bodies(&body).expect("Mars is supported");
         let system = build_orbital_system(
             &body,
-            body.properties().mu,
+            CentralGravity::Zonal {
+                mu: body.properties().mu,
+            },
             Some(epoch),
             &sat,
             &third_bodies,
-            None,
             None,
         )
         .expect("Mars is supported");
@@ -1047,11 +1100,12 @@ mod tests {
         assert!(
             build_orbital_system(
                 &body,
-                body.properties().mu,
+                CentralGravity::Zonal {
+                    mu: body.properties().mu
+                },
                 Some(Epoch::j2000()),
                 &sat,
                 &[],
-                None,
                 None,
             )
             .is_err(),
@@ -1120,15 +1174,28 @@ mod tests {
         let body = KnownBody::Earth;
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
-        let with_field =
-            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)))
-                .expect("Earth has a Sun ephemeris");
+        let with_field = build_orbital_system(
+            &body,
+            CentralGravity::Harmonic(earth_field(mu)),
+            epoch(),
+            &sat,
+            &[],
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
         let names = with_field.model_names();
         assert!(names.contains(&"spherical_harmonic_gravity"), "{names:?}");
         assert!(!names.contains(&"zonal_gravity"), "{names:?}");
 
-        let without = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None)
-            .expect("Earth has a Sun ephemeris");
+        let without = build_orbital_system(
+            &body,
+            CentralGravity::Zonal { mu },
+            epoch(),
+            &sat,
+            &[],
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
         let names = without.model_names();
         assert!(names.contains(&"zonal_gravity"), "{names:?}");
         assert!(!names.contains(&"spherical_harmonic_gravity"), "{names:?}");
@@ -1141,13 +1208,12 @@ mod tests {
         let sat = earth_sat(DisturbanceTorques::default());
         let dynamics = build_spacecraft_dynamics(
             &body,
-            mu,
+            CentralGravity::Harmonic(earth_field(mu)),
             epoch(),
             &sat,
             &[],
             Matrix3::identity(),
             None,
-            Some(earth_field(mu)),
         )
         .expect("Earth has a Sun ephemeris");
         let names = dynamics.model_names();
@@ -1163,11 +1229,24 @@ mod tests {
         let body = KnownBody::Earth;
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
-        let with_field =
-            build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)))
-                .expect("Earth has a Sun ephemeris");
-        let zonal = build_orbital_system(&body, mu, epoch(), &sat, &[], None, None)
-            .expect("Earth has a Sun ephemeris");
+        let with_field = build_orbital_system(
+            &body,
+            CentralGravity::Harmonic(earth_field(mu)),
+            epoch(),
+            &sat,
+            &[],
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
+        let zonal = build_orbital_system(
+            &body,
+            CentralGravity::Zonal { mu },
+            epoch(),
+            &sat,
+            &[],
+            None,
+        )
+        .expect("Earth has a Sun ephemeris");
         let state = crate::OrbitalState::new(
             nalgebra::Vector3::new(4000.0, -3000.0, 5000.0),
             nalgebra::Vector3::new(0.0, 7.5, 0.0),
@@ -1193,7 +1272,14 @@ mod tests {
         let body = KnownBody::Moon;
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
-        let _ = build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(earth_field(mu)));
+        let _ = build_orbital_system(
+            &body,
+            CentralGravity::Harmonic(earth_field(mu)),
+            epoch(),
+            &sat,
+            &[],
+            None,
+        );
     }
 
     #[test]
@@ -1202,17 +1288,30 @@ mod tests {
         let body = KnownBody::Earth;
         let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
-        let _ = build_orbital_system(&body, mu, None, &sat, &[], None, Some(earth_field(mu)));
+        let _ = build_orbital_system(
+            &body,
+            CentralGravity::Harmonic(earth_field(mu)),
+            None,
+            &sat,
+            &[],
+            None,
+        );
     }
 
+    /// The point mass runs at the field's own GM: there is no second `mu` to
+    /// hand the builder, so the WGS-84 / EGM2008 mix-up cannot be written.
     #[test]
-    #[should_panic(expected = "differs from the gravity field's GM")]
-    fn gravity_field_rejects_mismatched_mu() {
+    fn harmonic_gravity_takes_its_mu_from_the_field() {
         let body = KnownBody::Earth;
-        let mu = body.properties().mu;
         let sat = earth_sat(DisturbanceTorques::default());
-        // The field carries EGM2008's GM; the system is handed WGS-84's.
+        // EGM2008's GM, not the body constant (WGS-84's 398600.4418).
         let field = earth_field(398600.4415);
-        let _ = build_orbital_system(&body, mu, epoch(), &sat, &[], None, Some(field));
+        let gravity = CentralGravity::Harmonic(Arc::clone(&field));
+        assert_eq!(gravity.mu(), 398600.4415);
+        assert_ne!(gravity.mu(), body.properties().mu);
+        let system = build_orbital_system(&body, gravity, epoch(), &sat, &[], None)
+            .expect("Earth has a Sun ephemeris");
+        assert_eq!(system.mu, field.gm());
+        assert_eq!(CentralGravity::Zonal { mu: 42.0 }.mu(), 42.0);
     }
 }

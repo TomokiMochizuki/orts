@@ -578,12 +578,11 @@ impl ServeEngine {
             for spec in &params.satellites {
                 let system = build_orbital_system(
                     &params.body,
-                    params.mu,
+                    params.central_gravity(),
                     params.epoch,
                     &sat_params(spec),
                     &third_bodies,
                     params.build_atmosphere_model(),
-                    params.gravity_field(),
                 )
                 .map_err(|e| format!("solar force models: {e}"))?;
                 let initial = spec
@@ -1110,12 +1109,11 @@ impl ServeEngine {
             .map_err(|e| format!("central body {}: {e}", self.params.body.properties().name))?;
         let system = build_orbital_system(
             &self.params.body,
-            self.params.mu,
+            self.params.central_gravity(),
             self.params.epoch,
             &sat_params(&spec),
             &third_bodies,
             self.params.build_atmosphere_model(),
-            self.params.gravity_field(),
         )
         .map_err(|e| format!("solar force models: {e}"))?;
         // Evaluate the initial state at the instant the satellite enters the
@@ -1385,12 +1383,11 @@ fn build_info_message(params: &SimParams) -> Result<WsMessage, String> {
                     .collect(),
                 None => build_orbital_system(
                     &params.body,
-                    params.mu,
+                    params.central_gravity(),
                     params.epoch,
                     &sat_params(s),
                     &third_bodies,
                     params.build_atmosphere_model(),
-                    params.gravity_field(),
                 )
                 .map_err(|e| format!("solar force models: {e}"))?
                 .model_names()
@@ -1624,7 +1621,7 @@ orbit = { type = "circular", altitude = 50 }
         let mu = body.properties().mu;
         let dynamics = orts::setup::build_spacecraft_dynamics(
             &body,
-            mu,
+            orts::setup::CentralGravity::Zonal { mu: mu },
             None,
             &orts::setup::SatelliteParams {
                 has_drag: false,
@@ -1636,8 +1633,6 @@ orbit = { type = "circular", altitude = 50 }
             },
             &[],
             nalgebra::Matrix3::identity() * 10.0,
-            None,
-            // No spherical-harmonic field: these fixtures are the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");
@@ -2222,7 +2217,7 @@ cp_offset = [0.0, 0.0, 1.5]
         let inertia = nalgebra::Matrix3::from_diagonal(&nalgebra::Vector3::new(10.0, 40.0, 45.0));
         let dynamics = orts::setup::build_spacecraft_dynamics(
             &body,
-            mu,
+            orts::setup::CentralGravity::Zonal { mu: mu },
             None,
             &orts::setup::SatelliteParams {
                 has_drag: false,
@@ -2234,8 +2229,6 @@ cp_offset = [0.0, 0.0, 1.5]
             },
             &[],
             inertia,
-            None,
-            // No spherical-harmonic field: these fixtures are the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");

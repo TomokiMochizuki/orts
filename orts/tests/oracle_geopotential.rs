@@ -152,13 +152,12 @@ fn build_system_through_setup(fixtures: &FixtureFile, sc: &Scenario) -> OrbitalS
     };
     orts::setup::build_orbital_system_in_frame::<frame::Gcrs>(
         &arika::body::KnownBody::Earth,
-        field.gm(),
+        orts::setup::CentralGravity::Harmonic(field),
         Some(parse_epoch(&sc.epoch_utc)),
         &sat,
         // No third bodies: the fixture is point mass + the harmonic field only.
         &[],
         None,
-        Some(field),
         eop,
     )
     .expect("Earth has a Sun ephemeris")

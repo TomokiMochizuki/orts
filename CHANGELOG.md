@@ -119,6 +119,15 @@ section is subdivided by package.
   shared table. `HasPosition` is implemented for `OrbitalState<F>` in any
   frame, and `record::SimMetadata` carries the frame name.
   ([#411](https://github.com/sksat/orts/issues/411))
+- **BREAKING**: `setup::build_orbital_system`, `build_orbital_system_in_frame`
+  and `build_spacecraft_dynamics` take a `setup::CentralGravity` —
+  `Zonal { mu }` or `Harmonic(field)` — in place of the separate `mu` and
+  `gravity_field` arguments. The point-mass GM has one source
+  (`CentralGravity::mu()`, the field's own GM for `Harmonic`), so it can no
+  longer disagree with the field's, and the zonal / harmonic exclusivity is a
+  variant rather than a check inside the builder.
+  ([#411](https://github.com/sksat/orts/issues/411))
+
 
 #### Changed
 - `IndependentGroup` and `CoupledGroup` advance every solver through the same
