@@ -2058,10 +2058,17 @@ impl SimConfig {
 
     /// Reject configs that `orts serve` cannot honor.
     ///
-    /// `[[command]]` timelines are an `orts run` (deterministic batch)
-    /// transport; the serve loop does not build/drain a `CommandSchedule`,
-    /// so a timeline would be silently dropped. Interactive commanding in
-    /// serve is the (future) WebSocket console, not a config timeline.
+    /// The one gate for both `orts serve --config` and a WebSocket
+    /// `start_simulation`, so a setting serve cannot run is refused with one
+    /// reason wherever it comes from, and the next such setting is added here
+    /// rather than at each entry point.
+    ///
+    /// - `[[command]]` timelines are an `orts run` (deterministic batch)
+    ///   transport; the serve loop does not build/drain a `CommandSchedule`,
+    ///   so a timeline would be silently dropped. Interactive commanding in
+    ///   serve is the (future) WebSocket console, not a config timeline.
+    /// - `frame = "gcrs"`: serve is `SimpleEci`-locked
+    ///   ([`FrameChoice::serve_refusal`](crate::cli::FrameChoice::serve_refusal)).
     pub fn ensure_serve_supported(&self) -> Result<(), String> {
         if !self.commands.is_empty() {
             return Err(format!(
@@ -2070,6 +2077,12 @@ impl SimConfig {
                  Use `orts run` for scheduled commands.",
                 self.commands.len(),
                 if self.commands.len() == 1 { "y" } else { "ies" }
+            ));
+        }
+        if let Some(why) = self.try_frame_choice()?.serve_refusal() {
+            return Err(format!(
+                "frame = \"{}\" is not supported by `orts serve`: {why}",
+                self.frame
             ));
         }
         Ok(())
@@ -2865,6 +2878,29 @@ altitude = 500
 "#;
         let config: SimConfig = toml::from_str(toml).unwrap();
         assert!(config.ensure_serve_supported().is_ok());
+    }
+
+    /// `serve` is `SimpleEci`-locked, and this gate is what both
+    /// `serve --config` and a WebSocket `start_simulation` go through, so the
+    /// frame is refused here — with the config spelling in the message.
+    #[test]
+    fn serve_rejects_the_gcrs_frame_through_the_one_gate() {
+        let toml = r#"
+frame = "gcrs"
+eop = "zero"
+
+[[satellites]]
+[satellites.orbit]
+type = "circular"
+altitude = 500
+"#;
+        let config: SimConfig = toml::from_str(toml).unwrap();
+        let err = config.ensure_serve_supported().unwrap_err();
+        assert!(
+            err.starts_with("frame = \"gcrs\" is not supported by `orts serve`"),
+            "{err}"
+        );
+        assert!(err.contains("orts run --frame gcrs"), "{err}");
     }
 
     #[test]

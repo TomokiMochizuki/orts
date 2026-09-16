@@ -223,22 +223,12 @@ fn validate_sim_config(config: &SimConfig) -> Result<(), String> {
     config.validate()?;
     // The serve loop does not drain a `[[command]]` timeline, so a config that
     // `orts serve --config` rejects must not slip in through a WebSocket
-    // `start_simulation` and have its uplinks dropped instead.
+    // `start_simulation` and have its uplinks dropped instead. The same gate
+    // refuses `frame = "gcrs"` (serve is `SimpleEci`-locked).
     config.ensure_serve_supported()?;
     // `[gravity_field]` names a file on the server's filesystem. A WebSocket
     // client must not be able to make the server open arbitrary paths (or
     // panic on a missing one), so the field is CLI / config-file only.
-    // Same reason as `--frame gcrs` in `run_serve`: the serve engine is
-    // `SimpleEci`-only, so a client asking for `gcrs` must be told, not
-    // served the other frame.
-    if config.try_frame_choice()? == crate::cli::FrameChoice::Gcrs {
-        return Err(
-            "frame = \"gcrs\" is not supported by `orts serve`: the serve engine and \
-                    the plugin controller ABI propagate in SimpleEci. Use `orts run --frame \
-                    gcrs` for the IAU 2006 path."
-                .to_string(),
-        );
-    }
     if config.gravity_field.is_some() {
         return Err(
             "gravity_field is not accepted over WebSocket: start `orts serve` with \

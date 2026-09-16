@@ -298,25 +298,15 @@ async fn async_server(
         textures::spawn_texture_downloader(Arc::clone(&texture_cache), tx.clone());
     let bridge = Arc::new(StreamBridge::new());
 
-    // `serve` propagates in `SimpleEci` only: `ServeEngine` builds its states
-    // and systems through the non-generic APIs, and the plugin controller ABI
-    // is `SimpleEci` by design. Accepting `gcrs` would run the ERA-only frame
-    // behind an explicit request for the IAU 2006 one.
-    if sim.frame() == crate::cli::FrameChoice::Gcrs {
-        return Err(CmdError::usage(
-            "--frame gcrs is not supported by `orts serve`: the serve engine and the plugin \
-             controller ABI propagate in SimpleEci. Use `orts run --frame gcrs` for the \
-             IAU 2006 path.",
-        ));
-    }
-    if let Some(cfg) = &initial_config
-        && cfg.try_frame_choice().map_err(CmdError::usage)? == crate::cli::FrameChoice::Gcrs
-    {
-        return Err(CmdError::usage(
-            "frame = \"gcrs\" is not supported by `orts serve`: the serve engine and the \
-             plugin controller ABI propagate in SimpleEci. Use `orts run` for the IAU 2006 \
-             path, or set frame = \"simple-eci\".",
-        ));
+    // The flag spelling of the frame gate; a config's `frame =` was refused by
+    // `ensure_serve_supported` above, with the same reason. Accepting `gcrs`
+    // would run the ERA-only frame behind an explicit request for the IAU
+    // 2006 one.
+    if let Some(why) = sim.frame().serve_refusal() {
+        return Err(CmdError::usage(format!(
+            "--frame {} is not supported by `orts serve`: {why}",
+            sim.frame().as_str()
+        )));
     }
 
     // The initial simulation (`--config`, or orbit arguments on the legacy

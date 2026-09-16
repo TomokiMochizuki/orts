@@ -42,6 +42,26 @@ impl FrameChoice {
             Self::Gcrs => "gcrs",
         }
     }
+
+    /// Why `orts serve` cannot propagate in this frame, or `None` when it can.
+    ///
+    /// `serve` is `SimpleEci`-locked: `ServeEngine` builds its states and
+    /// systems through the non-generic APIs, and the plugin controller ABI is
+    /// `SimpleEci` by design. Every way a frame reaches `serve` — `--frame`,
+    /// `frame =` in a config, a WebSocket `start_simulation` — refuses through
+    /// this one method (`SimConfig::ensure_serve_supported` for the latter
+    /// two), so the reason is spelled once and a frame added later is refused
+    /// or accepted in one place.
+    pub fn serve_refusal(self) -> Option<&'static str> {
+        match self {
+            Self::SimpleEci => None,
+            Self::Gcrs => Some(
+                "`orts serve` propagates in SimpleEci only (the serve engine and the plugin \
+                 controller ABI are SimpleEci-locked); use `orts run --frame gcrs` for the \
+                 IAU 2006 path, or frame simple-eci",
+            ),
+        }
+    }
 }
 
 /// A frame `orts run` can propagate an orbit in.
