@@ -1045,10 +1045,15 @@ mod tests {
             (3, 0, -props.j3.unwrap() / 7.0f64.sqrt(), 0.0),
             (4, 0, -props.j4.unwrap() / 9.0f64.sqrt(), 0.0),
         ];
-        Arc::new(
-            SphericalHarmonicField::from_normalized_coefficients(mu, props.radius, 4, &coeffs)
-                .unwrap(),
-        )
+        let coefficients =
+            tobari::gravity::SphericalHarmonicCoefficients::from_normalized_coefficients(
+                mu,
+                props.radius,
+                4,
+                &coeffs,
+            )
+            .unwrap();
+        Arc::new(SphericalHarmonicField::full(coefficients).unwrap())
     }
 
     fn epoch() -> Option<Epoch> {

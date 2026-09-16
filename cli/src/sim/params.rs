@@ -482,8 +482,14 @@ impl SimParams {
         field.map_or_else(|| body.properties().mu, |f| f.gm())
     }
 
-    /// Load and truncate a spherical-harmonic gravity field from an ICGEM
-    /// `.gfc` path; `Ok(None)` when no path is given.
+    /// Load a spherical-harmonic gravity field from an ICGEM `.gfc` path as a
+    /// `degree × order` window; `Ok(None)` when no path is given.
+    ///
+    /// `degree` is handed to the parser as its cap, so a 70×70 request on the
+    /// degree-2190 EGM2008 file reads and allocates the 70×70 set only;
+    /// `None` reads the whole file. A degree the file does not carry, an
+    /// order above the degree, or a degree below 2 is an error rather than a
+    /// silent clamp.
     ///
     /// The entry points call this once, on the main task, and hand the result
     /// to `*_with_gravity_field`: a missing or malformed file is then a normal
@@ -499,17 +505,16 @@ impl SimParams {
         let Some(path) = path else {
             return Ok(None);
         };
-        let field =
-            tobari::gravity::SphericalHarmonicField::from_icgem_file(std::path::Path::new(path))
-                .map_err(|e| format!("Failed to load gravity field {path}: {e}"))?;
-        let degree = degree.unwrap_or(field.max_degree());
+        let coefficients = tobari::gravity::SphericalHarmonicCoefficients::from_icgem_file(
+            std::path::Path::new(path),
+            degree,
+        )
+        .map_err(|e| format!("Failed to load gravity field {path}: {e}"))?;
+        let degree = degree.unwrap_or(coefficients.max_degree());
         let order = order.unwrap_or(degree);
-        if degree < 2 || order > degree {
-            return Err(format!(
-                "gravity field truncation {degree}x{order}: need degree >= 2 and order <= degree"
-            ));
-        }
-        Ok(Some(Arc::new(field.truncated(degree, order))))
+        let field = tobari::gravity::SphericalHarmonicField::new(coefficients, degree, order)
+            .map_err(|e| format!("gravity field truncation {degree}x{order}: {e}"))?;
+        Ok(Some(Arc::new(field)))
     }
 
     /// [`load_gravity_field`](Self::load_gravity_field) for a config's
@@ -1398,7 +1403,7 @@ orbit = {{ type = "circular", altitude = 570 }}
         assert_eq!(params.mu, field.gm());
         assert_eq!(params.mu, 398600.4415);
         assert_ne!(params.mu, KnownBody::Earth.properties().mu);
-        assert_eq!((field.max_degree(), field.max_order()), (20, 20));
+        assert_eq!((field.degree(), field.order()), (20, 20));
         // Period sized with the field's GM, not WGS-84's.
         let r = KnownBody::Earth.properties().radius + 570.0;
         let expected = 2.0 * std::f64::consts::PI * (r * r * r / params.mu).sqrt();
@@ -1409,10 +1414,10 @@ orbit = {{ type = "circular", altitude = 570 }}
     fn gravity_field_truncation_defaults_to_the_files_degree_and_order_to_degree() {
         let params = SimParams::from_config(&config_with_field(""));
         let field = params.gravity_field.as_ref().unwrap();
-        assert_eq!((field.max_degree(), field.max_order()), (70, 70));
+        assert_eq!((field.degree(), field.order()), (70, 70));
         let params = SimParams::from_config(&config_with_field("degree = 8"));
         let field = params.gravity_field.as_ref().unwrap();
-        assert_eq!((field.max_degree(), field.max_order()), (8, 8));
+        assert_eq!((field.degree(), field.order()), (8, 8));
     }
 
     #[test]
@@ -1457,12 +1462,21 @@ orbit = { type = "circular", altitude = 570 }
         let field = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(8), Some(8))
             .unwrap()
             .expect("a field");
-        assert_eq!((field.max_degree(), field.max_order()), (8, 8));
+        assert_eq!((field.degree(), field.order()), (8, 8));
         let missing =
             SimParams::load_gravity_field(Some("/nonexistent/EGM.gfc"), None, None).unwrap_err();
         assert!(missing.contains("/nonexistent/EGM.gfc"), "{missing}");
         let bad = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(8), Some(9)).unwrap_err();
-        assert!(bad.contains("order <= degree"), "{bad}");
+        assert!(bad.contains("order 9 exceeds degree 8"), "{bad}");
+        // More than the file carries is an error, not a clamp to 70×70.
+        let too_high =
+            SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(71), None).unwrap_err();
+        assert!(
+            too_high.contains("degree 71 requested") && too_high.contains("max_degree 70"),
+            "{too_high}"
+        );
+        let too_low = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(1), None).unwrap_err();
+        assert!(too_low.contains("starts at degree 2"), "{too_low}");
     }
 
     /// The loaded field is the one the parameters carry — no second open.
