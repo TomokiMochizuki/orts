@@ -1,7 +1,17 @@
 //! Spherical-harmonic geopotential (EGM96 / EGM2008 / EIGEN-class fields).
 //!
-//! [`SphericalHarmonicField`] holds a fully normalized coefficient set
-//! `C̄nm, S̄nm` and evaluates the **non-central** disturbing potential
+//! Two types, split the same way as `CssiData` / `CssiSpaceWeather`:
+//!
+//! - [`SphericalHarmonicCoefficients`] is the data — a fully normalized
+//!   `C̄nm, S̄nm` set with its `GM`, reference radius and metadata, loaded
+//!   from an ICGEM file or given explicitly. It is immutable and meant to be
+//!   shared (`Arc`) between every evaluator that uses it.
+//! - [`SphericalHarmonicField`] is an evaluator over a `degree × order` window
+//!   of one such set. It owns the Legendre recursion table for that degree
+//!   and nothing else; [`truncated`](SphericalHarmonicField::truncated) makes
+//!   another window over the same coefficients without copying them.
+//!
+//! The field evaluates the **non-central** disturbing potential
 //!
 //! ```text
 //! U(r, θ, λ) = (GM / r) Σ_{n=2}^{N} Σ_{m=0}^{min(n,M)} (a/r)^n P̄nm(cos θ) (C̄nm cos mλ + S̄nm sin mλ)
@@ -51,12 +61,14 @@
 //! # Cost
 //!
 //! `O(N·M)` per evaluation with `O(N)` scratch, allocated per call (four
-//! small `Vec`s). The recursion coefficients are precomputed once per field.
+//! small `Vec`s). The recursion coefficients (`O(N²)`) are precomputed once
+//! per [`SphericalHarmonicField`]; the coefficient set itself is shared.
 
 mod icgem;
 mod legendre;
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
@@ -67,7 +79,7 @@ use legendre::{HfRecursion, SCALE_UP, tri_index, tri_len};
 
 pub use icgem::{IcgemError, TideSystem};
 
-/// Highest degree a field may declare.
+/// Highest degree a coefficient set may declare.
 ///
 /// 2190 is the highest degree distributed by ICGEM (EGM2008 / EIGEN-6C4),
 /// and the 2⁻⁹³⁰ scaling in [`legendre`] keeps `P̃nm(±1)` representable to
@@ -80,7 +92,8 @@ pub const MAX_DEGREE: usize = 2190;
 use crate::math::F64Ext;
 
 /// Why a coefficient set handed to
-/// [`SphericalHarmonicField::from_normalized_coefficients`] was rejected.
+/// [`SphericalHarmonicCoefficients::from_normalized_coefficients`] was
+/// rejected.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoefficientError {
     /// `m > n` or `n > max_degree`.
@@ -108,7 +121,7 @@ impl fmt::Display for CoefficientError {
 
 impl core::error::Error for CoefficientError {}
 
-/// Error from [`SphericalHarmonicField::from_icgem_file`].
+/// Error from [`SphericalHarmonicCoefficients::from_icgem_file`].
 #[cfg(feature = "std")]
 #[derive(Debug)]
 pub enum IcgemFileError {
@@ -131,40 +144,78 @@ impl fmt::Display for IcgemFileError {
 #[cfg(feature = "std")]
 impl std::error::Error for IcgemFileError {}
 
-/// A static spherical-harmonic gravity field with fully normalized
-/// coefficients, evaluated in its body-fixed frame.
+/// Why a `degree × order` window over a coefficient set could not be set up
+/// ([`SphericalHarmonicField::new`] / [`truncated`](SphericalHarmonicField::truncated)).
 ///
-/// Immutable once built; see the [module docs](self) for the model and its
-/// conventions.
-#[derive(Clone, PartialEq)]
-pub struct SphericalHarmonicField {
+/// Each of these is a request the evaluator cannot honour as stated. It does
+/// not clamp instead: a simulation configured for 70×70 on a degree-36 file
+/// would otherwise run at 36×36 and report nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TruncationError {
+    /// `degree` exceeds the coefficient set's `max_degree`.
+    DegreeUnavailable { requested: usize, available: usize },
+    /// `order > degree` (there is no `C̄nm` with `m > n`).
+    OrderExceedsDegree { degree: usize, order: usize },
+    /// `degree < 2`: the field starts at degree 2 (degree 0 is the point mass,
+    /// degree 1 vanishes), so such a field would evaluate to exactly zero.
+    DegreeBelowTwo(usize),
+}
+
+impl fmt::Display for TruncationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DegreeUnavailable {
+                requested,
+                available,
+            } => write!(
+                f,
+                "degree {requested} requested, but the coefficients stop at degree {available}"
+            ),
+            Self::OrderExceedsDegree { degree, order } => {
+                write!(f, "order {order} exceeds degree {degree}")
+            }
+            Self::DegreeBelowTwo(d) => write!(
+                f,
+                "degree {d} has no non-central terms (the field starts at degree 2)"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for TruncationError {}
+
+/// A static, fully normalized spherical-harmonic coefficient set with its
+/// constants and source metadata.
+///
+/// Pure data: it evaluates nothing. Build a [`SphericalHarmonicField`] over
+/// it to evaluate a `degree × order` window; several fields can share one set
+/// through `Arc`.
+#[derive(Clone)]
+pub struct SphericalHarmonicCoefficients {
     gm_km3_s2: f64,
     radius_km: f64,
     max_degree: usize,
-    max_order: usize,
     tide_system: TideSystem,
     model_name: Option<String>,
     /// C̄nm at `tri_index(n, m)`, `n ≤ max_degree`.
     c: Vec<f64>,
     /// S̄nm, same layout.
     s: Vec<f64>,
-    recursion: HfRecursion,
 }
 
-impl fmt::Debug for SphericalHarmonicField {
+impl fmt::Debug for SphericalHarmonicCoefficients {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SphericalHarmonicField")
+        f.debug_struct("SphericalHarmonicCoefficients")
             .field("gm_km3_s2", &self.gm_km3_s2)
             .field("radius_km", &self.radius_km)
             .field("max_degree", &self.max_degree)
-            .field("max_order", &self.max_order)
             .field("tide_system", &self.tide_system)
             .field("model_name", &self.model_name)
             .finish_non_exhaustive()
     }
 }
 
-impl SphericalHarmonicField {
+impl SphericalHarmonicCoefficients {
     /// Parse a static ICGEM `.gfc` text (see [`icgem`](self) rules and
     /// [`IcgemError`] for what is rejected).
     pub fn from_icgem(text: &str) -> Result<Self, IcgemError> {
@@ -173,29 +224,27 @@ impl SphericalHarmonicField {
             gm_km3_s2: p.gm_km3_s2,
             radius_km: p.radius_km,
             max_degree: p.max_degree,
-            max_order: p.max_degree,
             tide_system: p.tide_system,
             model_name: p.model_name,
             c: p.c,
             s: p.s,
-            recursion: HfRecursion::new(p.max_degree),
         })
     }
 
     /// Read and parse a static ICGEM `.gfc` file.
     ///
     /// Large official files (EGM2008 to degree 2190 is ~100 MB) parse in full;
-    /// call [`truncated`](Self::truncated) afterwards to keep only what the
+    /// the [`SphericalHarmonicField`] built on top then selects the window the
     /// simulation needs.
-    // TODO: stream-parse with a degree/order cut-off so a full EGM2008 file
-    // does not allocate 2.4 M coefficients just to keep 70×70.
+    // TODO: stream-parse with a degree cut-off so a full EGM2008 file does not
+    // allocate 2.4 M coefficients just to keep 70×70.
     #[cfg(feature = "std")]
     pub fn from_icgem_file(path: &std::path::Path) -> Result<Self, IcgemFileError> {
         let text = std::fs::read_to_string(path).map_err(IcgemFileError::Io)?;
         Self::from_icgem(&text).map_err(IcgemFileError::Parse)
     }
 
-    /// Build a field from explicit fully normalized coefficients.
+    /// Build a set from explicit fully normalized coefficients.
     ///
     /// `coefficients` are `(n, m, C̄nm, S̄nm)`; any `(n, m)` not listed is zero.
     /// Degree 0/1 entries are ignored by the evaluator (see module docs).
@@ -238,35 +287,14 @@ impl SphericalHarmonicField {
             gm_km3_s2,
             radius_km,
             max_degree,
-            max_order: max_degree,
             tide_system: TideSystem::Unknown,
             model_name: None,
             c,
             s,
-            recursion: HfRecursion::new(max_degree),
         })
     }
 
-    /// A copy limited to `degree × order` (each clamped to what this field
-    /// has; `order` is also clamped to `degree`).
-    pub fn truncated(&self, degree: usize, order: usize) -> Self {
-        let max_degree = degree.min(self.max_degree);
-        let max_order = order.min(max_degree).min(self.max_order);
-        let len = tri_len(max_degree);
-        Self {
-            gm_km3_s2: self.gm_km3_s2,
-            radius_km: self.radius_km,
-            max_degree,
-            max_order,
-            tide_system: self.tide_system,
-            model_name: self.model_name.clone(),
-            c: self.c[..len].to_vec(),
-            s: self.s[..len].to_vec(),
-            recursion: HfRecursion::new(max_degree),
-        }
-    }
-
-    /// Gravitational parameter of the field \[km³/s²\].
+    /// Gravitational parameter of the set \[km³/s²\].
     ///
     /// Use this same value for the point-mass term. EGM2008's GM
     /// (398600.4415) differs from WGS-84's (398600.4418) by 7.5e-10 — only
@@ -282,14 +310,9 @@ impl SphericalHarmonicField {
         self.radius_km
     }
 
-    /// Highest degree evaluated.
+    /// Highest degree the set carries (every `m ≤ n ≤ max_degree` is stored).
     pub fn max_degree(&self) -> usize {
         self.max_degree
-    }
-
-    /// Highest order evaluated (`≤ max_degree`; `0` means zonal only).
-    pub fn max_order(&self) -> usize {
-        self.max_order
     }
 
     /// Permanent-tide convention declared by the source file.
@@ -303,9 +326,6 @@ impl SphericalHarmonicField {
     }
 
     /// `(C̄nm, S̄nm)` for `m ≤ n ≤ max_degree`, else `None`.
-    ///
-    /// Reports stored values regardless of `max_order`; use
-    /// [`truncated`](Self::truncated) to drop coefficients.
     pub fn coefficient(&self, n: usize, m: usize) -> Option<(f64, f64)> {
         (m <= n && n <= self.max_degree).then(|| {
             let i = tri_index(n, m);
@@ -314,11 +334,114 @@ impl SphericalHarmonicField {
     }
 
     /// The unnormalized zonal coefficient `J2 = −√5 · C̄20`, for comparison
-    /// with zonal-only models. `0` for a field truncated below degree 2 (it
+    /// with zonal-only models. `0` for a set that stops below degree 2 (it
     /// has no oblateness term to report).
     pub fn j2(&self) -> f64 {
         self.coefficient(2, 0)
             .map_or(0.0, |(c20, _)| -(5.0f64).sqrt() * c20)
+    }
+}
+
+/// Evaluator of a `degree × order` window of a
+/// [`SphericalHarmonicCoefficients`] set in its body-fixed frame.
+///
+/// Holds the coefficients by `Arc` and the Holmes–Featherstone recursion
+/// table for `degree`; see the [module docs](self) for the model and its
+/// conventions.
+pub struct SphericalHarmonicField {
+    coefficients: Arc<SphericalHarmonicCoefficients>,
+    degree: usize,
+    order: usize,
+    recursion: HfRecursion,
+}
+
+impl fmt::Debug for SphericalHarmonicField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SphericalHarmonicField")
+            .field("coefficients", &self.coefficients)
+            .field("degree", &self.degree)
+            .field("order", &self.order)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SphericalHarmonicField {
+    /// Evaluate `coefficients` up to `degree × order`.
+    ///
+    /// `degree` must lie in `2..=coefficients.max_degree()` and `order` in
+    /// `0..=degree` (`0` is zonal only); anything else is a
+    /// [`TruncationError`] rather than a clamp. Accepts the set by value or as
+    /// an `Arc` — pass a cloned `Arc` to build several windows over one set.
+    pub fn new(
+        coefficients: impl Into<Arc<SphericalHarmonicCoefficients>>,
+        degree: usize,
+        order: usize,
+    ) -> Result<Self, TruncationError> {
+        let coefficients = coefficients.into();
+        if degree < 2 {
+            return Err(TruncationError::DegreeBelowTwo(degree));
+        }
+        if degree > coefficients.max_degree {
+            return Err(TruncationError::DegreeUnavailable {
+                requested: degree,
+                available: coefficients.max_degree,
+            });
+        }
+        if order > degree {
+            return Err(TruncationError::OrderExceedsDegree { degree, order });
+        }
+        Ok(Self {
+            coefficients,
+            degree,
+            order,
+            recursion: HfRecursion::new(degree),
+        })
+    }
+
+    /// Evaluate every coefficient the set carries (`max_degree × max_degree`).
+    pub fn full(
+        coefficients: impl Into<Arc<SphericalHarmonicCoefficients>>,
+    ) -> Result<Self, TruncationError> {
+        let coefficients = coefficients.into();
+        let n = coefficients.max_degree;
+        Self::new(coefficients, n, n)
+    }
+
+    /// Another window over the same coefficients, limited to `degree × order`.
+    ///
+    /// Shares the coefficient set (no copy); only the recursion table is
+    /// rebuilt. The bounds are those of [`new`](Self::new) — this is not
+    /// limited to this field's own window, so it can widen as well as narrow.
+    pub fn truncated(&self, degree: usize, order: usize) -> Result<Self, TruncationError> {
+        Self::new(Arc::clone(&self.coefficients), degree, order)
+    }
+
+    /// The coefficient set this field evaluates (clone the `Arc` to build
+    /// another window over it).
+    pub fn coefficients(&self) -> &Arc<SphericalHarmonicCoefficients> {
+        &self.coefficients
+    }
+
+    /// Gravitational parameter \[km³/s²\]; see
+    /// [`SphericalHarmonicCoefficients::gm`] for why the point mass must use
+    /// this same value.
+    pub fn gm(&self) -> f64 {
+        self.coefficients.gm_km3_s2
+    }
+
+    /// Reference radius \[km\] ([`SphericalHarmonicCoefficients::radius`]).
+    pub fn radius(&self) -> f64 {
+        self.coefficients.radius_km
+    }
+
+    /// Highest degree evaluated (`≤ coefficients().max_degree()`).
+    pub fn degree(&self) -> usize {
+        self.degree
+    }
+
+    /// Highest order evaluated (`≤ degree`; `0` means zonal only).
+    pub fn order(&self) -> usize {
+        self.order
     }
 
     /// Non-central disturbing potential `U` \[km²/s²\] at a body-fixed
@@ -352,11 +475,12 @@ impl SphericalHarmonicField {
             (1.0, 0.0)
         };
 
-        let n_max = self.max_degree;
-        let m_max = self.max_order;
+        let n_max = self.degree;
+        let m_max = self.order;
+        let (c, s) = (&self.coefficients.c, &self.coefficients.s);
 
         // (a/r)^n
-        let a_over_r = self.radius_km / r;
+        let a_over_r = self.coefficients.radius_km / r;
         let mut q = vec![1.0; n_max + 1];
         for n in 1..=n_max {
             q[n] = q[n - 1] * a_over_r;
@@ -392,7 +516,7 @@ impl SphericalHarmonicField {
             let (mut e_c, mut e_s) = (0.0, 0.0); // Σ q e P̃_{n,m+1} C, …
             for n in m.max(2)..=n_max {
                 let i = tri_index(n, m);
-                let (cnm, snm) = (self.c[i], self.s[i]);
+                let (cnm, snm) = (c[i], s[i]);
                 let qp = q[n] * col[n];
                 let nqp = n as f64 * qp;
                 // e_nn = 0 and col_next[n] is only defined for n > m.
@@ -427,7 +551,7 @@ impl SphericalHarmonicField {
             core::mem::swap(&mut col, &mut col_next);
         }
 
-        let gm_over_r = self.gm_km3_s2 / r;
+        let gm_over_r = self.coefficients.gm_km3_s2 / r;
         let potential = gm_over_r * h_v * SCALE_UP;
         let du_dr = -potential / r - gm_over_r / r * h_r * SCALE_UP;
         let du_dtheta = gm_over_r * (g_t - u * h_e) * SCALE_UP;
@@ -451,9 +575,23 @@ mod tests {
     const GM: f64 = 398600.4415;
     const A: f64 = 6378.1363;
 
+    /// A field over every coefficient of an explicit set.
+    fn field_from(
+        max_degree: usize,
+        coefficients: &[(usize, usize, f64, f64)],
+    ) -> SphericalHarmonicField {
+        let coefficients = SphericalHarmonicCoefficients::from_normalized_coefficients(
+            GM,
+            A,
+            max_degree,
+            coefficients,
+        )
+        .unwrap();
+        SphericalHarmonicField::full(coefficients).unwrap()
+    }
+
     fn single(n: usize, m: usize, c: f64, s: f64) -> SphericalHarmonicField {
-        SphericalHarmonicField::from_normalized_coefficients(GM, A, n.max(2), &[(n, m, c, s)])
-            .unwrap()
+        field_from(n.max(2), &[(n, m, c, s)])
     }
 
     /// Gradient of `P(x,y,z) / r^k` given `P` and `∇P` at `pos`.
@@ -583,12 +721,12 @@ mod tests {
         );
     }
 
-    /// Deterministic pseudo-random full field: every (n, m) non-zero, decaying
-    /// like Kaula's rule so magnitudes are realistic.
-    fn synthetic_field(degree: usize, order: usize) -> SphericalHarmonicField {
+    /// Deterministic pseudo-random coefficient set: every (n, m) non-zero,
+    /// decaying like Kaula's rule so magnitudes are realistic.
+    fn synthetic_coefficients(degree: usize) -> SphericalHarmonicCoefficients {
         let mut coeffs = Vec::new();
         for n in 2..=degree {
-            for m in 0..=n.min(order) {
+            for m in 0..=n {
                 let k = 1e-5 / ((n * n) as f64);
                 let phase = 1.3 * n as f64 + 0.7 * m as f64;
                 coeffs.push((
@@ -599,7 +737,12 @@ mod tests {
                 ));
             }
         }
-        SphericalHarmonicField::from_normalized_coefficients(GM, A, degree, &coeffs).unwrap()
+        SphericalHarmonicCoefficients::from_normalized_coefficients(GM, A, degree, &coeffs).unwrap()
+    }
+
+    /// A `degree × order` window over [`synthetic_coefficients`]`(degree)`.
+    fn synthetic_field(degree: usize, order: usize) -> SphericalHarmonicField {
+        SphericalHarmonicField::new(synthetic_coefficients(degree), degree, order).unwrap()
     }
 
     /// `a = ∇U` by central differences of the potential at two step sizes,
@@ -671,17 +814,18 @@ mod tests {
     #[test]
     fn truncation_equals_zeroing_the_dropped_coefficients() {
         let full = synthetic_field(10, 10);
-        let truncated = full.truncated(6, 3);
-        assert_eq!((truncated.max_degree(), truncated.max_order()), (6, 3));
+        let truncated = full.truncated(6, 3).unwrap();
+        assert_eq!((truncated.degree(), truncated.order()), (6, 3));
+        // The window shares the set rather than copying it.
+        assert!(Arc::ptr_eq(truncated.coefficients(), full.coefficients()));
         let mut kept = Vec::new();
         for n in 2..=6 {
             for m in 0..=n.min(3) {
-                let (c, s) = full.coefficient(n, m).unwrap();
+                let (c, s) = full.coefficients().coefficient(n, m).unwrap();
                 kept.push((n, m, c, s));
             }
         }
-        let zeroed =
-            SphericalHarmonicField::from_normalized_coefficients(GM, A, 10, &kept).unwrap();
+        let zeroed = field_from(10, &kept);
         for pos in sample_positions() {
             let a = truncated.acceleration_ecef(&pos);
             assert_close(
@@ -692,23 +836,46 @@ mod tests {
                 "truncation",
             );
         }
-        // Clamping: asking for more than the field has is a no-op.
-        let same = full.truncated(99, 99);
-        assert_eq!((same.max_degree(), same.max_order()), (10, 10));
-        assert_eq!(same, full);
+    }
+
+    /// A window the set cannot provide is an error, not a silent clamp: a
+    /// 70×70 simulation on a degree-36 file must fail to configure rather than
+    /// quietly run at 36×36.
+    #[test]
+    fn windows_outside_the_set_are_rejected() {
+        let coefficients = Arc::new(synthetic_coefficients(10));
+        let full = SphericalHarmonicField::full(Arc::clone(&coefficients)).unwrap();
+        assert_eq!((full.degree(), full.order()), (10, 10));
+        assert_eq!(
+            full.truncated(11, 0).unwrap_err(),
+            TruncationError::DegreeUnavailable {
+                requested: 11,
+                available: 10
+            }
+        );
+        assert_eq!(
+            SphericalHarmonicField::new(Arc::clone(&coefficients), 6, 7).unwrap_err(),
+            TruncationError::OrderExceedsDegree {
+                degree: 6,
+                order: 7
+            }
+        );
+        // A narrowed window can be widened again, up to the set's degree.
+        let narrow = full.truncated(4, 0).unwrap();
+        let widened = narrow.truncated(10, 10).unwrap();
+        assert_eq!((widened.degree(), widened.order()), (10, 10));
     }
 
     #[test]
     fn zonal_only_truncation_ignores_tesseral_coefficients() {
         let full = synthetic_field(6, 6);
-        let zonal = full.truncated(6, 0);
+        let zonal = full.truncated(6, 0).unwrap();
         let mut zonal_coeffs = Vec::new();
         for n in 2..=6 {
-            let (c, _) = full.coefficient(n, 0).unwrap();
+            let (c, _) = full.coefficients().coefficient(n, 0).unwrap();
             zonal_coeffs.push((n, 0, c, 0.0));
         }
-        let explicit =
-            SphericalHarmonicField::from_normalized_coefficients(GM, A, 6, &zonal_coeffs).unwrap();
+        let explicit = field_from(6, &zonal_coeffs);
         for pos in sample_positions() {
             let a = zonal.acceleration_ecef(&pos);
             assert_close(
@@ -723,28 +890,41 @@ mod tests {
 
     #[test]
     fn j2_is_minus_sqrt5_c20() {
-        let f = single(2, 0, -4.84165143790815e-4, 0.0);
-        assert!((f.j2() - 1.08262617385222e-3).abs() < 1e-15, "{}", f.j2());
+        let c = SphericalHarmonicCoefficients::from_normalized_coefficients(
+            GM,
+            A,
+            2,
+            &[(2, 0, -4.84165143790815e-4, 0.0)],
+        )
+        .unwrap();
+        assert!((c.j2() - 1.08262617385222e-3).abs() < 1e-15, "{}", c.j2());
     }
 
-    /// Truncating below degree 2 leaves nothing to evaluate; every accessor
-    /// and the evaluator must still be total (no out-of-bounds on the shorter
-    /// coefficient arrays).
+    /// A window below degree 2 has nothing to evaluate, so it is refused up
+    /// front rather than built as a field that returns exactly zero.
     #[test]
-    fn fields_below_degree_two_are_inert_not_panicking() {
+    fn windows_below_degree_two_are_rejected() {
         let full = synthetic_field(6, 6);
         for (d, o) in [(0, 0), (1, 1), (1, 0)] {
-            let f = full.truncated(d, o);
-            assert_eq!(f.j2(), 0.0);
-            assert_eq!(f.coefficient(2, 0), None);
-            let pos = Vector3::new(4000.0, -3000.0, 5000.0);
-            assert_eq!(f.acceleration_ecef(&pos), Vector3::zeros());
-            assert_eq!(f.potential_ecef(&pos), 0.0);
+            assert_eq!(
+                full.truncated(d, o).unwrap_err(),
+                TruncationError::DegreeBelowTwo(d)
+            );
         }
+        // A set that stops below degree 2 is valid data with nothing to
+        // evaluate: `full` refuses it the same way.
+        let degree_one =
+            SphericalHarmonicCoefficients::from_normalized_coefficients(GM, A, 1, &[]).unwrap();
+        assert_eq!(degree_one.j2(), 0.0);
+        assert_eq!(degree_one.coefficient(2, 0), None);
+        assert_eq!(
+            SphericalHarmonicField::full(degree_one).unwrap_err(),
+            TruncationError::DegreeBelowTwo(1)
+        );
     }
 
     #[test]
-    fn from_icgem_sets_max_order_to_max_degree() {
+    fn from_icgem_reads_header_and_coefficients_and_full_covers_them() {
         let text = "\
 earth_gravity_constant 3.986004415E+14
 radius 6378136.3
@@ -755,44 +935,43 @@ gfc 2 0 -4.8e-4 0.0
 gfc 2 1 0.0 0.0
 gfc 2 2 2.4e-6 -1.4e-6
 ";
-        let f = SphericalHarmonicField::from_icgem(text).unwrap();
-        assert_eq!((f.max_degree(), f.max_order()), (2, 2));
-        assert_eq!(f.gm(), 398600.4415);
-        assert_eq!(f.radius(), 6378.1363);
-        assert_eq!(f.tide_system(), TideSystem::Unknown);
-        assert_eq!(f.coefficient(2, 2), Some((2.4e-6, -1.4e-6)));
-        assert_eq!(f.coefficient(3, 0), None);
-        assert_eq!(f.coefficient(1, 2), None);
+        let c = SphericalHarmonicCoefficients::from_icgem(text).unwrap();
+        assert_eq!(c.max_degree(), 2);
+        assert_eq!(c.gm(), 398600.4415);
+        assert_eq!(c.radius(), 6378.1363);
+        assert_eq!(c.tide_system(), TideSystem::Unknown);
+        assert_eq!(c.coefficient(2, 2), Some((2.4e-6, -1.4e-6)));
+        assert_eq!(c.coefficient(3, 0), None);
+        assert_eq!(c.coefficient(1, 2), None);
+        let f = SphericalHarmonicField::full(c).unwrap();
+        assert_eq!((f.degree(), f.order()), (2, 2));
+        assert_eq!((f.gm(), f.radius()), (398600.4415, 6378.1363));
     }
 
     #[test]
     fn from_normalized_coefficients_validates_input() {
+        let build = |gm, max_degree, coeffs: &[(usize, usize, f64, f64)]| {
+            SphericalHarmonicCoefficients::from_normalized_coefficients(gm, A, max_degree, coeffs)
+                .unwrap_err()
+        };
         assert_eq!(
-            SphericalHarmonicField::from_normalized_coefficients(GM, A, 2, &[(3, 0, 1.0, 0.0)]),
-            Err(CoefficientError::IndexOutOfRange {
+            build(GM, 2, &[(3, 0, 1.0, 0.0)]),
+            CoefficientError::IndexOutOfRange {
                 degree: 3,
                 order: 0
-            })
+            }
         );
         assert_eq!(
-            SphericalHarmonicField::from_normalized_coefficients(
-                GM,
-                A,
-                2,
-                &[(2, 0, f64::NAN, 0.0)]
-            ),
-            Err(CoefficientError::NonFinite {
+            build(GM, 2, &[(2, 0, f64::NAN, 0.0)]),
+            CoefficientError::NonFinite {
                 degree: 2,
                 order: 0
-            })
+            }
         );
+        assert_eq!(build(-1.0, 2, &[]), CoefficientError::InvalidConstant("gm"));
         assert_eq!(
-            SphericalHarmonicField::from_normalized_coefficients(-1.0, A, 2, &[]),
-            Err(CoefficientError::InvalidConstant("gm"))
-        );
-        assert_eq!(
-            SphericalHarmonicField::from_normalized_coefficients(GM, A, MAX_DEGREE + 1, &[]),
-            Err(CoefficientError::InvalidConstant("max_degree"))
+            build(GM, MAX_DEGREE + 1, &[]),
+            CoefficientError::InvalidConstant("max_degree")
         );
     }
 
@@ -800,15 +979,14 @@ gfc 2 2 2.4e-6 -1.4e-6
     /// coefficients: C' = C cos mΔ − S sin mΔ, S' = C sin mΔ + S cos mΔ.
     fn rotated_coefficients(field: &SphericalHarmonicField, delta: f64) -> SphericalHarmonicField {
         let mut coeffs = Vec::new();
-        for n in 2..=field.max_degree() {
+        for n in 2..=field.degree() {
             for m in 0..=n {
-                let (c, s) = field.coefficient(n, m).unwrap();
+                let (c, s) = field.coefficients().coefficient(n, m).unwrap();
                 let (sn, cs) = (m as f64 * delta).sin_cos();
                 coeffs.push((n, m, c * cs - s * sn, c * sn + s * cs));
             }
         }
-        SphericalHarmonicField::from_normalized_coefficients(GM, A, field.max_degree(), &coeffs)
-            .unwrap()
+        field_from(field.degree(), &coeffs)
     }
 
     proptest! {
@@ -845,11 +1023,11 @@ gfc 2 2 2.4e-6 -1.4e-6
             let mut scaled = Vec::new();
             for n in 2..=6 {
                 for m in 0..=n {
-                    let (c, s) = field.coefficient(n, m).unwrap();
+                    let (c, s) = field.coefficients().coefficient(n, m).unwrap();
                     scaled.push((n, m, alpha * c, alpha * s));
                 }
             }
-            let scaled = SphericalHarmonicField::from_normalized_coefficients(GM, A, 6, &scaled).unwrap();
+            let scaled = field_from(6, &scaled);
             let base = field.acceleration_ecef(&pos);
             let want = alpha * base;
             let got = scaled.acceleration_ecef(&pos);

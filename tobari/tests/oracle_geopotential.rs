@@ -17,7 +17,9 @@
 
 use nalgebra::Vector3;
 use serde::Deserialize;
-use tobari::gravity::{SphericalHarmonicField, TideSystem};
+use std::sync::Arc;
+
+use tobari::gravity::{SphericalHarmonicCoefficients, SphericalHarmonicField, TideSystem};
 
 #[derive(Deserialize)]
 struct Reference {
@@ -40,9 +42,11 @@ struct Point {
     potential_km2_s2: f64,
 }
 
-fn load_field() -> SphericalHarmonicField {
-    SphericalHarmonicField::from_icgem(include_str!("fixtures/orekit_geopotential_70x70.gfc"))
-        .expect("fixture gfc must parse")
+fn load_coefficients() -> SphericalHarmonicCoefficients {
+    SphericalHarmonicCoefficients::from_icgem(include_str!(
+        "fixtures/orekit_geopotential_70x70.gfc"
+    ))
+    .expect("fixture gfc must parse")
 }
 
 fn load_reference() -> Reference {
@@ -54,16 +58,20 @@ fn load_reference() -> Reference {
 
 #[test]
 fn fixture_field_metadata_matches_orekit_provider() {
-    let field = load_field();
+    let coefficients = load_coefficients();
     let reference = load_reference();
-    assert_eq!((field.max_degree(), field.max_order()), (70, 70));
-    assert_eq!(field.gm(), reference.mu_km3_s2);
-    assert_eq!(field.radius(), reference.radius_km);
-    assert_eq!(field.tide_system(), TideSystem::TideFree);
+    assert_eq!(coefficients.max_degree(), 70);
+    assert_eq!(coefficients.gm(), reference.mu_km3_s2);
+    assert_eq!(coefficients.radius(), reference.radius_km);
+    assert_eq!(coefficients.tide_system(), TideSystem::TideFree);
     // C̄20 of the orekit-data default field, and its J2, in the WGS-84 ballpark.
-    let (c20, _) = field.coefficient(2, 0).unwrap();
+    let (c20, _) = coefficients.coefficient(2, 0).unwrap();
     assert!((c20 + 4.8416e-4).abs() < 1e-8, "C20 = {c20}");
-    assert!((field.j2() - 1.0826e-3).abs() < 1e-7, "J2 = {}", field.j2());
+    assert!(
+        (coefficients.j2() - 1.0826e-3).abs() < 1e-7,
+        "J2 = {}",
+        coefficients.j2()
+    );
 }
 
 /// Every (degree, order) truncation, every sample point: acceleration and
@@ -74,15 +82,13 @@ fn fixture_field_metadata_matches_orekit_provider() {
 /// largest term.
 #[test]
 fn acceleration_and_potential_match_orekit_pointwise() {
-    let full = load_field();
+    let coefficients = Arc::new(load_coefficients());
     let reference = load_reference();
     assert!(!reference.sets.is_empty());
     for set in &reference.sets {
-        let field = full.truncated(set.degree, set.order);
-        assert_eq!(
-            (field.max_degree(), field.max_order()),
-            (set.degree, set.order)
-        );
+        let field = SphericalHarmonicField::new(Arc::clone(&coefficients), set.degree, set.order)
+            .expect("fixture window must fit the 70x70 set");
+        assert_eq!((field.degree(), field.order()), (set.degree, set.order));
         assert!(
             set.points.len() >= 30,
             "too few points in {}x{}",

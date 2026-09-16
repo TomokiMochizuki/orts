@@ -43,7 +43,7 @@ flowchart TB
 |-------|-------|------|
 | Foundation | [`utsuroi`](utsuroi/) | 汎用 ODE ソルバ (RK4, DOP853, Dormand-Prince, Störmer-Verlet, Yoshida)。`OdeState`, `DynamicalSystem` trait を提供。 |
 | Foundation | [`arika`](arika/) | 型安全な座標系 (ECI / ECEF / IAU)、時刻系 (UTC / TT / TDB / TAI)、Meeus 解析天体暦、JPL Horizons 取得、WGS-84、EOP。 |
-| Environment | [`tobari`](tobari/) | 大気モデル (Exponential, Harris-Priester, NRLMSISE-00)、球面調和重力場 (`SphericalHarmonicField`: ICGEM `.gfc` loader + Holmes–Featherstone 評価)、地磁気場 (IGRF-14, 傾斜双極子)、宇宙天気プロバイダ (CSSI, GFZ)。 |
+| Environment | [`tobari`](tobari/) | 大気モデル (Exponential, Harris-Priester, NRLMSISE-00)、球面調和重力場 (`SphericalHarmonicCoefficients`: ICGEM `.gfc` loader、`SphericalHarmonicField`: degree × order 窓の Holmes–Featherstone 評価)、地磁気場 (IGRF-14, 傾斜双極子)、宇宙天気プロバイダ (CSSI, GFZ)。 |
 | Simulation | [`orts`](orts/) | `OrbitalState` / `AttitudeState` / `SpacecraftState`、統一 `Model<S>` trait、`OrbitalSystem` / `AttitudeSystem` / `SpacecraftDynamics`、センサモデル、プラグインホスト、Rerun `.rrd` 出力。 |
 | Application | [`orts-cli`](cli/) | `orts run` / `orts serve` / `orts replay` / `orts convert`。viewer を埋め込み、port 9001 で WebSocket ストリームを公開。 |
 | Extension | [`orts-plugin-sdk`](plugin-sdk/) | WASM plugin guest 制御則を書くための Rust SDK (callback 形式 / main-loop 形式)。 |

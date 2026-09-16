@@ -31,7 +31,7 @@ use orts::orbital::{OrbitalState, OrbitalSystem};
 use orts::perturbations::SphericalHarmonicGravity;
 use serde::Deserialize;
 use std::sync::Arc;
-use tobari::gravity::SphericalHarmonicField;
+use tobari::gravity::{SphericalHarmonicCoefficients, SphericalHarmonicField};
 use utsuroi::{DormandPrince, Integrator};
 
 #[derive(Deserialize)]
@@ -79,8 +79,8 @@ fn load_fixtures() -> FixtureFile {
     .expect("fixture json must parse")
 }
 
-fn load_field() -> SphericalHarmonicField {
-    SphericalHarmonicField::from_icgem(include_str!(
+fn load_coefficients() -> SphericalHarmonicCoefficients {
+    SphericalHarmonicCoefficients::from_icgem(include_str!(
         "../../tobari/tests/fixtures/orekit_geopotential_70x70.gfc"
     ))
     .expect("fixture gfc must parse")
@@ -111,7 +111,10 @@ fn eop() -> GcrsEopStorage {
 
 fn build_system(fixtures: &FixtureFile, sc: &Scenario) -> OrbitalSystem<frame::Gcrs> {
     let g = &sc.force_model.gravity;
-    let field = Arc::new(load_field().truncated(g.degree, g.order));
+    let field = Arc::new(
+        SphericalHarmonicField::new(load_coefficients(), g.degree, g.order)
+            .expect("fixture window must fit the 70x70 set"),
+    );
     assert_eq!(
         field.gm(),
         fixtures.mu_km3_s2,

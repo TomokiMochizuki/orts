@@ -13,10 +13,11 @@
 //!
 //! ## Gravity field
 //!
-//! [`gravity::SphericalHarmonicField`] evaluates a fully normalized
+//! [`gravity::SphericalHarmonicCoefficients`] loads a fully normalized
 //! spherical-harmonic geopotential (EGM96 / EGM2008 / EIGEN-class ICGEM
-//! files) in its body-fixed frame — the non-central part only, for use next
-//! to a point-mass term.
+//! files) and [`gravity::SphericalHarmonicField`] evaluates a `degree × order`
+//! window of it in its body-fixed frame — the non-central part only, for use
+//! next to a point-mass term.
 //!
 //! ## Magnetic field
 //!
@@ -62,7 +63,9 @@ pub mod space_weather;
 pub use cssi::{CssiData, CssiSpaceWeather, OutOfRangeBehavior};
 pub use exponential::Exponential;
 #[cfg(feature = "alloc")]
-pub use gravity::{IcgemError, SphericalHarmonicField, TideSystem};
+pub use gravity::{
+    IcgemError, SphericalHarmonicCoefficients, SphericalHarmonicField, TideSystem, TruncationError,
+};
 pub use harris_priester::HarrisPriester;
 pub use nrlmsise00::Nrlmsise00;
 pub use space_weather::{ConstantWeather, SpaceWeather, SpaceWeatherProvider};

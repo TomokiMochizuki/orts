@@ -86,7 +86,8 @@ section is subdivided by package.
   epoch. ([#453](https://github.com/sksat/orts/pull/453))
 - `perturbations::SphericalHarmonicGravity<F: EarthFixedTransform>` — full
   spherical-harmonic gravity from a `tobari::gravity::SphericalHarmonicField`
-  (EGM96 / EGM2008 / EIGEN-class ICGEM files), rotated through `F`'s
+  (a degree × order window over `SphericalHarmonicCoefficients` loaded from
+  EGM96 / EGM2008 / EIGEN-class ICGEM files), rotated through `F`'s
   Earth-fixed chain: ERA-only for `SimpleEci`, the IAU 2006 CIO chain with
   polar motion for `Gcrs`. Non-central terms only (install next to
   `PointMass`, never together with `ZonalGravity`); panics without an
@@ -1236,16 +1237,20 @@ section is subdivided by package.
 ### `tobari` (Rust, crates.io)
 
 #### Added
-- `gravity::SphericalHarmonicField`: static ICGEM `.gfc` parser (fully
+- `gravity::SphericalHarmonicCoefficients`: static ICGEM `.gfc` parser (fully
   normalized `gfc` records; `gfct`/`trnd`/`dot`/`asin`/`acos` time-variable
   records and `unnormalized` files are rejected with an explicit error;
   `errors` column count, `m ≤ n`, duplicates, non-finite values, `C00 = 1`,
   zero degree-1 and completeness are validated; `norm` is required and
-  `max_degree` is capped at `gravity::MAX_DEGREE` = 2190) plus a Holmes–Featherstone
-  evaluator of the non-central potential and acceleration in the body frame,
-  km units. Same structure as Orekit's `HolmesFeatherstoneAttractionModel`
-  but regular at the exact pole. `truncated(degree, order)`, `gm()`,
-  `radius()`, `tide_system()` (recorded, not converted), `j2()`. Agrees with
+  `max_degree` is capped at `gravity::MAX_DEGREE` = 2190) with `gm()`,
+  `radius()`, `tide_system()` (recorded, not converted), `coefficient(n, m)`,
+  `j2()`; and `gravity::SphericalHarmonicField`, a Holmes–Featherstone
+  evaluator of the non-central potential and acceleration in the body frame
+  (km units) over a `degree × order` window of one shared (`Arc`) coefficient
+  set — `new(coefficients, degree, order)` / `full` / `truncated` return
+  `TruncationError` for a window the set cannot provide instead of clamping.
+  Same structure as Orekit's `HolmesFeatherstoneAttractionModel` but regular
+  at the exact pole. Agrees with
   Orekit pointwise to 1e-13·GM/r² up to 70×70
   (`tests/oracle_geopotential.rs`, fixtures from
   `tools/generate_orekit_geopotential_fixtures.py`).

@@ -1,9 +1,10 @@
 //! Full spherical-harmonic gravity as a frame-aware perturbation.
 //!
-//! [`SphericalHarmonicGravity`] wraps a [`SphericalHarmonicField`] (a fully
-//! normalized `C̄nm, S̄nm` set such as EGM96 / EGM2008 / EIGEN-6C4, loaded
-//! from an ICGEM `.gfc` file) and evaluates its non-central acceleration in
-//! the propagation frame `F`.
+//! [`SphericalHarmonicGravity`] wraps a [`SphericalHarmonicField`] (a
+//! `degree × order` evaluator over a fully normalized `C̄nm, S̄nm` set such as
+//! EGM96 / EGM2008 / EIGEN-6C4, loaded from an ICGEM `.gfc` file as
+//! [`SphericalHarmonicCoefficients`](tobari::gravity::SphericalHarmonicCoefficients))
+//! and evaluates its non-central acceleration in the propagation frame `F`.
 //!
 //! The tesseral and sectorial terms (`m ≥ 1`) are fixed to the rotating
 //! Earth, so unlike [`ZonalGravity`](super::ZonalGravity) — which only needs
@@ -24,8 +25,8 @@
 //!   contributes degree ≥ 2 only.
 //! - **Not together with `ZonalGravity`**: both contain J2/J3/J4, so the
 //!   oblateness would be counted twice. Install one or the other.
-//! - Use the field's own [`gm()`](SphericalHarmonicField::gm) for the point
-//!   mass. EGM2008's GM (398600.4415) differs from WGS-84's (398600.4418) by
+//! - Use the coefficient set's own [`gm()`](SphericalHarmonicField::gm) for
+//!   the point mass. EGM2008's GM (398600.4415) differs from WGS-84's (398600.4418) by
 //!   7.5e-10, worth ~0.3 m/day along-track at LEO — small, but the central
 //!   term and the harmonics are one model, so do not mix two GMs.
 //!
@@ -51,8 +52,9 @@ use crate::model::{ExternalLoads, HasFrame, HasOrbit, Model};
 /// [`SphericalHarmonicField`], evaluated through frame `F`'s Earth-fixed
 /// transform.
 pub struct SphericalHarmonicGravity<F: EarthFixedTransform = frame::SimpleEci> {
-    /// The coefficient set (shared: several satellites can hold the same
-    /// 70×70 field without copying its ~20 k coefficients each).
+    /// The evaluator (shared: several satellites can hold the same 70×70
+    /// field without each rebuilding its recursion table; the coefficient set
+    /// underneath is shared by the field itself).
     pub field: Arc<SphericalHarmonicField>,
     /// EOP storage for the frame's Earth-fixed transform. `()` for
     /// `SimpleEci`.
@@ -116,6 +118,19 @@ mod tests {
     use crate::test_support::zero_eop;
     use arika::earth::eop::{NutationCorrections, PolarMotion, Ut1Offset};
     use arika::earth::{GcrsEopStorage, J2 as J2_E, J3 as J3_E, J4 as J4_E, MU as MU_E, R as R_E};
+    use tobari::gravity::SphericalHarmonicCoefficients;
+
+    /// A field over every coefficient of an explicit set.
+    fn field(
+        max_degree: usize,
+        coeffs: &[(usize, usize, f64, f64)],
+    ) -> Arc<SphericalHarmonicField> {
+        let coefficients = SphericalHarmonicCoefficients::from_normalized_coefficients(
+            MU_E, R_E, max_degree, coeffs,
+        )
+        .unwrap();
+        Arc::new(SphericalHarmonicField::full(coefficients).unwrap())
+    }
 
     /// J2..J4 as a fully normalized zonal field: C̄n0 = −Jn / √(2n+1).
     fn zonal_field() -> Arc<SphericalHarmonicField> {
@@ -124,23 +139,13 @@ mod tests {
             (3, 0, -J3_E / 7.0f64.sqrt(), 0.0),
             (4, 0, -J4_E / 9.0f64.sqrt(), 0.0),
         ];
-        Arc::new(
-            SphericalHarmonicField::from_normalized_coefficients(MU_E, R_E, 4, &coeffs).unwrap(),
-        )
+        field(4, &coeffs)
     }
 
     /// A C̄22-only field: its potential is largest along the body-fixed ±x
     /// axis, so the ECI direction of that axis is observable.
     fn c22_field() -> Arc<SphericalHarmonicField> {
-        Arc::new(
-            SphericalHarmonicField::from_normalized_coefficients(
-                MU_E,
-                R_E,
-                2,
-                &[(2, 2, 1e-6, 0.0)],
-            )
-            .unwrap(),
-        )
+        field(2, &[(2, 2, 1e-6, 0.0)])
     }
 
     fn positions() -> [Vector3<f64>; 5] {

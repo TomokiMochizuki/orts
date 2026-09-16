@@ -109,7 +109,8 @@ propagator.addForceModel(HolmesFeatherstoneAttractionModel(itrf, provider))
 
 **Rust equivalent**:
 ```rust
-let field = Arc::new(SphericalHarmonicField::from_icgem(gfc_text)?.truncated(70, 70));
+let coefficients = SphericalHarmonicCoefficients::from_icgem(gfc_text)?;
+let field = Arc::new(SphericalHarmonicField::new(coefficients, 70, 70)?);
 OrbitalSystem::<Gcrs>::new(field.gm(), Box::new(PointMass))
     .with_epoch(epoch)
     .with_model(SphericalHarmonicGravity::<Gcrs>::new(field, eop));
