@@ -2516,7 +2516,7 @@ orbit = { type = "circular", altitude = 500 }
 epoch = "2024-03-20T12:00:00Z"
 
 [gravity_field]
-path = "{}"
+path = '{}'
 degree = 8
 
 [[satellites]]

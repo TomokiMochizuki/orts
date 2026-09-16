@@ -1377,7 +1377,7 @@ dt = 10.0
 epoch = "2024-03-20T12:00:00Z"
 
 [gravity_field]
-path = "{GFC_FIXTURE}"
+path = '{GFC_FIXTURE}'
 {degree}
 
 [[satellites]]
