@@ -188,9 +188,11 @@ impl core::error::Error for TruncationError {}
 /// constants and source metadata.
 ///
 /// Pure data: it evaluates nothing. Build a [`SphericalHarmonicField`] over
-/// it to evaluate a `degree × order` window; several fields can share one set
-/// through `Arc`.
-#[derive(Clone)]
+/// it to evaluate a `degree × order` window; several fields share one set
+/// through `Arc`. It is deliberately not `Clone` (a set is shared, up to
+/// 38 MB for degree 2190, never duplicated) and not `PartialEq` (bitwise
+/// equality of the arrays is the wrong notion of "same model": the same
+/// EGM2008 from two distributors can differ in the last bit).
 pub struct SphericalHarmonicCoefficients {
     gm_km3_s2: f64,
     radius_km: f64,
