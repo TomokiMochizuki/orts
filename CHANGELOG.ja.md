@@ -101,7 +101,6 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   なるので場の GM と食い違えず、zonal / harmonic の排他は builder 内のチェックではなく
   variant で表される。([#411](https://github.com/sksat/orts/issues/411))
 
-
 #### Changed
 - `IndependentGroup` と `CoupledGroup` が、どの solver も同じ 3 つの呼び出し
   (`stepper` / `from_checked_state` / `advance_to`) で進めるようになった (RK4 の枝だけが
@@ -426,7 +425,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `auto` は IERS から `finals2000A.all` を取得 (24h キャッシュ)、パス指定はローカル
   ファイル、`zero` は model CIP のみ。`gcrs` は Earth 専用・EOP 必須で、姿勢付き
   fleet・コントローラ・`orts serve` (いずれも `SimpleEci` 固定) では黙って fallback
-  せず reject する。recording の metadata に frame を残す (`# frame = gcrs`)。
+  せず reject する。`auto` またはファイル指定では、伝播区間が EOP table の範囲を
+  外れる run を伝播前に reject し、table と run の MJD 範囲を示す (範囲外では
+  transform が末尾の行を保持して黙って精度を落とすが、それは `zero` だけが明示的に
+  選ぶもの)。recording の metadata に frame を残す (`# frame = gcrs`)。
   ([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) と `run` / `serve` の
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]`: ICGEM `.gfc`

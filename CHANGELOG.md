@@ -128,7 +128,6 @@ section is subdivided by package.
   variant rather than a check inside the builder.
   ([#411](https://github.com/sksat/orts/issues/411))
 
-
 #### Changed
 - `IndependentGroup` and `CoupledGroup` advance every solver through the same
   three calls (`stepper`, `from_checked_state`, `advance_to`), where the RK4
@@ -532,8 +531,12 @@ section is subdivided by package.
   24 h cache, a path loads a local series, `zero` asks for the model CIP only.
   `gcrs` is Earth-only, requires an EOP source, and is refused for attitude
   fleets, controllers and `orts serve` (all `SimpleEci`-locked) rather than
-  silently falling back. The recording metadata names the frame
-  (`# frame = gcrs`). ([#411](https://github.com/sksat/orts/issues/411))
+  silently falling back. With `auto` or a file, a run whose span leaves the
+  EOP table is refused before propagation, naming the table's and the run's
+  MJD ranges: past the table the transform would hold the last row and lose
+  accuracy without saying so, which only `zero` opts into explicitly. The
+  recording metadata names the frame (`# frame = gcrs`).
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) and
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]` on `run` /
   `serve`: install a full spherical-harmonic geopotential from an ICGEM `.gfc`

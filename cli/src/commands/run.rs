@@ -143,6 +143,10 @@ pub fn run_simulation_cmd(
             ));
         }
     };
+    // With real EOP the run has to stay inside the table: past its end the
+    // transform would clamp to the last row and lose accuracy silently, which
+    // only `--eop zero` may opt into.
+    params.ensure_eop_covers_run().map_err(CmdError::failure)?;
     // Every path above, config included. A config's own `validate` reaches this
     // first and can name the offending `[[satellites]]` index; a `--sat` fleet has
     // no per-entry validation at all, and here is where it gets one.

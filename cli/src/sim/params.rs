@@ -556,6 +556,40 @@ impl SimParams {
         F::eop_storage(self.eop.as_ref())
     }
 
+    /// Refuse a run whose span leaves the loaded EOP table.
+    ///
+    /// `RunFrame::eop_storage` wraps the table in `ClampedEop`, which answers
+    /// an instant outside the table with its nearest row — so a run extending
+    /// past the series would drift toward the accuracy `--eop zero` opts into
+    /// *explicitly*, without saying so. `auto` and a file are held to the same
+    /// standard here: `[epoch, epoch + horizon]` has to lie inside the table,
+    /// where the horizon is `duration`, else the longest orbital period in
+    /// the fleet (an orbit-only run ends each satellite at its own period; a
+    /// controlled fleet runs to the longest).
+    ///
+    /// Nothing to check without a table (`simple-eci`, or `eop = "zero"`).
+    pub fn ensure_eop_covers_run(&self) -> Result<(), String> {
+        let (Some(table), Some(epoch)) = (&self.eop, self.epoch) else {
+            return Ok(());
+        };
+        let horizon = self
+            .duration
+            .unwrap_or_else(|| self.satellites.iter().map(|s| s.period).fold(0.0, f64::max));
+        let (start, end) = (epoch.mjd(), epoch.add_si_seconds(horizon).mjd());
+        let (first, last) = table.mjd_range();
+        if start < first || end > last {
+            return Err(format!(
+                "the EOP table covers MJD {first:.1} to {last:.1}, but the run spans MJD \
+                 {start:.1} to {end:.1}: outside the table the Earth orientation would be \
+                 held at the nearest row and lose accuracy without saying so. Use an EOP \
+                 source covering the run (`eop = \"auto\"` fetches the current IERS \
+                 series, which carries about a year of predictions), or opt into the \
+                 model-only chain with `eop = \"zero\"`"
+            ));
+        }
+        Ok(())
+    }
+
     /// Load space weather provider from a source string.
     fn load_space_weather(source: Option<&str>) -> Option<Arc<tobari::CssiSpaceWeather>> {
         match source {
@@ -1601,6 +1635,49 @@ orbit = { type = "circular", altitude = 570 }
 
     /// The loaded table reaches the frame's storage, and `simple-eci` asks for
     /// none.
+    /// The fixture covers 2024-03-01..2024-04-30 (MJD 60370..60430). A run
+    /// inside it passes; one that starts or ends outside is refused rather
+    /// than clamped, and a run without a table has nothing to check.
+    #[test]
+    fn eop_table_must_cover_the_run() {
+        let params = |epoch: &str, duration: &str, eop: &str| {
+            let cfg: SimConfig = toml::from_str(&format!(
+                "frame = \"gcrs\"\neop = '{eop}'\nepoch = \"{epoch}\"\n{duration}\n\
+                 \n[[satellites]]\nid = \"a\"\norbit = {{ type = \"circular\", altitude = 570 }}\n"
+            ))
+            .expect("valid toml");
+            SimParams::from_config(&cfg).expect("the fixture loads")
+        };
+        // One day inside the table.
+        params("2024-03-20T12:00:00Z", "duration = 86400.0", EOP_FIXTURE)
+            .ensure_eop_covers_run()
+            .expect("a run inside the table");
+        // No `duration`: the horizon is the orbital period (~96 min), which
+        // still fits.
+        params("2024-04-29T12:00:00Z", "", EOP_FIXTURE)
+            .ensure_eop_covers_run()
+            .expect("one orbit before the table ends");
+        // Ends after the table.
+        let err = params("2024-04-29T12:00:00Z", "duration = 172800.0", EOP_FIXTURE)
+            .ensure_eop_covers_run()
+            .unwrap_err();
+        assert!(
+            err.contains("the EOP table covers MJD 60370.0 to 60430.0"),
+            "{err}"
+        );
+        assert!(err.contains("eop = \"zero\""), "{err}");
+        // Starts before the table.
+        assert!(
+            params("2024-01-01T00:00:00Z", "duration = 60.0", EOP_FIXTURE)
+                .ensure_eop_covers_run()
+                .is_err()
+        );
+        // `zero` has no table, so there is nothing to cover.
+        params("2030-01-01T00:00:00Z", "duration = 86400.0", "zero")
+            .ensure_eop_covers_run()
+            .expect("no table, no range");
+    }
+
     #[test]
     fn eop_storage_follows_the_frame() {
         let cfg: SimConfig = toml::from_str(&format!(

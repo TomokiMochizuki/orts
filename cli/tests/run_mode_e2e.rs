@@ -931,6 +931,24 @@ fn test_frame_gcrs_runs_and_differs_from_simple_eci() {
     );
 }
 
+/// A `gcrs` run that leaves the EOP table is refused before propagation: the
+/// fixture ends 2024-04-30, so a two-day run from 2024-04-29 falls off it.
+/// Clamping to the last row would have run without a word.
+#[test]
+fn test_gcrs_run_outside_the_eop_table_is_refused() {
+    let config = one_orbit_config(&format!("frame = \"gcrs\"\neop = '{EOP_FIXTURE}'"))
+        .replace(
+            "epoch = \"2024-03-20T12:00:00Z\"",
+            "epoch = \"2024-04-29T12:00:00Z\"",
+        )
+        .replace("duration = 5400.0", "duration = 172800.0");
+    let out = run_config("frame-gcrs-eop-range", &config);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a run off the table must be refused");
+    assert!(stderr.contains("the EOP table covers MJD"), "{stderr}");
+    assert!(stderr.contains("eop = \"zero\""), "{stderr}");
+}
+
 /// `gcrs` without EOP, on a non-Earth body, or with `eop` but no `gcrs` is
 /// refused with a reason instead of quietly falling back.
 #[test]
