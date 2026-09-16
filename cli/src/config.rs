@@ -309,32 +309,112 @@ pub struct GravityFieldConfig {
     pub order: Option<usize>,
 }
 
+/// How a [`GravityFieldConfigError`] names the setting it is about: the
+/// config-file keys, or the `orts run` flags that spell the same setting.
+///
+/// The check is one; only the vocabulary differs per entry point, so the
+/// error carries *which* rule failed and each caller renders the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GravityFieldNames {
+    /// The setting as a whole (`gravity_field` / `--gravity-field`).
+    pub table: &'static str,
+    pub path: &'static str,
+    pub degree: &'static str,
+    pub order: &'static str,
+}
+
+impl GravityFieldNames {
+    /// `[gravity_field]` in a config file.
+    pub const CONFIG_KEYS: Self = Self {
+        table: "gravity_field",
+        path: "gravity_field.path",
+        degree: "gravity_field.degree",
+        order: "gravity_field.order",
+    };
+
+    /// The `orts run` flags. `--gravity-field` *is* the path, so it names both
+    /// the setting and its `path`.
+    pub const CLI_FLAGS: Self = Self {
+        table: "--gravity-field",
+        path: "--gravity-field",
+        degree: "--gravity-degree",
+        order: "--gravity-order",
+    };
+}
+
+/// Why a `[gravity_field]` (or its `--gravity-*` spelling) is not usable,
+/// before any file is opened.
+///
+/// `Display` renders with the config-file keys; a CLI caller renders with
+/// [`render`](Self::render) and [`GravityFieldNames::CLI_FLAGS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GravityFieldConfigError {
+    /// `SphericalHarmonicGravity` is Earth-only: its Earth-fixed transform
+    /// spins at Earth's rate.
+    NotEarth { body: String },
+    /// `path` is empty or whitespace.
+    EmptyPath,
+    /// Degrees 0 and 1 carry no harmonic terms, so there is nothing to
+    /// evaluate.
+    DegreeTooLow(usize),
+    /// `order > degree`.
+    OrderExceedsDegree { order: usize, degree: usize },
+}
+
+impl GravityFieldConfigError {
+    /// The message with the setting named in the caller's vocabulary.
+    pub fn render(&self, names: &GravityFieldNames) -> String {
+        match self {
+            Self::NotEarth { body } => format!(
+                "{}: a spherical-harmonic gravity field is Earth-only, but body is '{body}'",
+                names.table
+            ),
+            Self::EmptyPath => format!("{} must not be empty", names.path),
+            Self::DegreeTooLow(d) => format!(
+                "{} must be >= 2 (got {d}); degrees 0 and 1 carry no harmonic terms",
+                names.degree
+            ),
+            Self::OrderExceedsDegree { order, degree } => format!(
+                "{} ({order}) must not exceed {} ({degree})",
+                names.order, names.degree
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for GravityFieldConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&GravityFieldNames::CONFIG_KEYS))
+    }
+}
+
+impl std::error::Error for GravityFieldConfigError {}
+
 impl GravityFieldConfig {
-    /// Structural checks that need no file: Earth only, degree ≥ 2, order ≤
-    /// degree. (Degree 0/1 leave nothing to evaluate; `SphericalHarmonicGravity`
-    /// is Earth-only because the Earth-fixed transform spins at Earth's rate.)
-    pub fn validate(&self, body: &str) -> Result<(), String> {
+    /// Structural checks that need no file: Earth only, non-empty path,
+    /// degree ≥ 2, order ≤ degree. The error says which rule failed; see
+    /// [`GravityFieldConfigError::render`] for naming it as a flag.
+    pub fn validate(&self, body: &str) -> Result<(), GravityFieldConfigError> {
         if crate::satellite::try_parse_body(body) != Some(KnownBody::Earth) {
-            return Err(format!(
-                "gravity_field: a spherical-harmonic gravity field is Earth-only, but body is '{body}'"
-            ));
+            return Err(GravityFieldConfigError::NotEarth {
+                body: body.to_string(),
+            });
         }
         if self.path.trim().is_empty() {
-            return Err("gravity_field.path must not be empty".to_string());
+            return Err(GravityFieldConfigError::EmptyPath);
         }
         if let Some(d) = self.degree
             && d < 2
         {
-            return Err(format!(
-                "gravity_field.degree must be >= 2 (got {d}); degrees 0 and 1 carry no harmonic terms"
-            ));
+            return Err(GravityFieldConfigError::DegreeTooLow(d));
         }
         if let (Some(d), Some(o)) = (self.degree, self.order)
             && o > d
         {
-            return Err(format!(
-                "gravity_field.order ({o}) must not exceed gravity_field.degree ({d})"
-            ));
+            return Err(GravityFieldConfigError::OrderExceedsDegree {
+                order: o,
+                degree: d,
+            });
         }
         Ok(())
     }
@@ -1779,7 +1859,7 @@ impl SimConfig {
             ));
         }
         if let Some(gf) = &self.gravity_field {
-            gf.validate(&self.body)?;
+            gf.validate(&self.body).map_err(|e| e.to_string())?;
         }
         if let Some(epoch) = &self.epoch
             && arika::epoch::Epoch::from_iso8601(epoch).is_none()
@@ -5079,6 +5159,56 @@ degree = 70
             let err = config_with(extra).validate().unwrap_err();
             assert!(err.contains(needle), "{extra}: {err}");
         }
+    }
+
+    /// One rule, two vocabularies: the same error names the config key or
+    /// the `orts run` flag, so neither entry point rewrites the other's text.
+    #[test]
+    fn gravity_field_errors_render_as_config_keys_or_cli_flags() {
+        let cases: [(GravityFieldConfigError, &str, &str); 4] = [
+            (
+                GravityFieldConfigError::NotEarth {
+                    body: "moon".into(),
+                },
+                "gravity_field: a spherical-harmonic gravity field is Earth-only, but body is 'moon'",
+                "--gravity-field: a spherical-harmonic gravity field is Earth-only, but body is 'moon'",
+            ),
+            (
+                GravityFieldConfigError::EmptyPath,
+                "gravity_field.path must not be empty",
+                "--gravity-field must not be empty",
+            ),
+            (
+                GravityFieldConfigError::DegreeTooLow(1),
+                "gravity_field.degree must be >= 2 (got 1); degrees 0 and 1 carry no harmonic terms",
+                "--gravity-degree must be >= 2 (got 1); degrees 0 and 1 carry no harmonic terms",
+            ),
+            (
+                GravityFieldConfigError::OrderExceedsDegree {
+                    order: 9,
+                    degree: 8,
+                },
+                "gravity_field.order (9) must not exceed gravity_field.degree (8)",
+                "--gravity-order (9) must not exceed --gravity-degree (8)",
+            ),
+        ];
+        for (err, as_config, as_flags) in cases {
+            assert_eq!(err.to_string(), as_config);
+            assert_eq!(err.render(&GravityFieldNames::CONFIG_KEYS), as_config);
+            assert_eq!(err.render(&GravityFieldNames::CLI_FLAGS), as_flags);
+        }
+        let gf = GravityFieldConfig {
+            path: "x.gfc".into(),
+            degree: Some(8),
+            order: Some(9),
+        };
+        assert_eq!(
+            gf.validate("earth"),
+            Err(GravityFieldConfigError::OrderExceedsDegree {
+                order: 9,
+                degree: 8
+            })
+        );
     }
 
     /// A typo inside `[gravity_field]` is reported as an unread key, like one

@@ -15,6 +15,7 @@ use orts::visibility::{StationContact, VisibilityMonitor};
 
 use crate::cli::{IntegratorChoice, OutputFormat, SimArgs};
 use crate::commands::CmdError;
+use crate::config::GravityFieldNames;
 use crate::satellite::OrbitSpec;
 use crate::sim::mode::{
     SimMode, ensure_commands_deliverable, ensure_streams_unused, select_sim_mode,
@@ -74,8 +75,9 @@ fn reject_gravity_flags_with_config(sim: &SimArgs, config_path: &str) -> Result<
 
 /// The `[gravity_field]` rules for the flag spelling: the same structural
 /// checks `GravityFieldConfig::validate` runs for a config (Earth only,
-/// degree ≥ 2, order ≤ degree), plus "truncation without a field" — which the
-/// config cannot express and would otherwise be dropped in silence.
+/// degree ≥ 2, order ≤ degree), rendered with the flag names, plus
+/// "truncation without a field" — which the config cannot express and would
+/// otherwise be dropped in silence.
 fn validate_gravity_args(sim: &SimArgs) -> Result<(), String> {
     match &sim.gravity_field {
         Some(path) => crate::config::GravityFieldConfig {
@@ -84,14 +86,7 @@ fn validate_gravity_args(sim: &SimArgs) -> Result<(), String> {
             order: sim.gravity_order,
         }
         .validate(&sim.body)
-        .map_err(|e| {
-            // Config key → flag, most specific first so `gravity_field.path`
-            // names `--gravity-field` (there is no `--gravity-path`).
-            e.replace("gravity_field.path", "--gravity-field")
-                .replace("gravity_field.degree", "--gravity-degree")
-                .replace("gravity_field.order", "--gravity-order")
-                .replace("gravity_field", "--gravity-field")
-        }),
+        .map_err(|e| e.render(&GravityFieldNames::CLI_FLAGS)),
         None if sim.gravity_degree.is_some() || sim.gravity_order.is_some() => Err(
             "--gravity-degree / --gravity-order truncate a spherical-harmonic field: \
              pass --gravity-field <PATH> as well, or drop them"
@@ -2481,8 +2476,7 @@ mod tests {
     }
 
     /// `--gravity-field` gets the `[gravity_field]` structural rules on the
-    /// direct-CLI path too, phrased as flags, instead of panicking later in
-    /// `load_gravity_field` / `check_gravity_field_preconditions`.
+    /// direct-CLI path too, phrased as flags, before any file is opened.
     #[test]
     fn validate_sim_args_applies_gravity_field_rules() {
         assert!(validate_sim_args(&args(&["--gravity-field", "x.gfc"])).is_ok());
