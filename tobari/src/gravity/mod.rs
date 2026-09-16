@@ -334,14 +334,6 @@ impl SphericalHarmonicCoefficients {
             (self.c[i], self.s[i])
         })
     }
-
-    /// The unnormalized zonal coefficient `J2 = −√5 · C̄20`, for comparison
-    /// with zonal-only models. `0` for a set that stops below degree 2 (it
-    /// has no oblateness term to report).
-    pub fn j2(&self) -> f64 {
-        self.coefficient(2, 0)
-            .map_or(0.0, |(c20, _)| -(5.0f64).sqrt() * c20)
-    }
 }
 
 /// Evaluator of a `degree × order` window of a
@@ -890,18 +882,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn j2_is_minus_sqrt5_c20() {
-        let c = SphericalHarmonicCoefficients::from_normalized_coefficients(
-            GM,
-            A,
-            2,
-            &[(2, 0, -4.84165143790815e-4, 0.0)],
-        )
-        .unwrap();
-        assert!((c.j2() - 1.08262617385222e-3).abs() < 1e-15, "{}", c.j2());
-    }
-
     /// A window below degree 2 has nothing to evaluate, so it is refused up
     /// front rather than built as a field that returns exactly zero.
     #[test]
@@ -917,7 +897,6 @@ mod tests {
         // evaluate: `full` refuses it the same way.
         let degree_one =
             SphericalHarmonicCoefficients::from_normalized_coefficients(GM, A, 1, &[]).unwrap();
-        assert_eq!(degree_one.j2(), 0.0);
         assert_eq!(degree_one.coefficient(2, 0), None);
         assert_eq!(
             SphericalHarmonicField::full(degree_one).unwrap_err(),

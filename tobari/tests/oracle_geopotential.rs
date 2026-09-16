@@ -64,14 +64,13 @@ fn fixture_field_metadata_matches_orekit_provider() {
     assert_eq!(coefficients.gm(), reference.mu_km3_s2);
     assert_eq!(coefficients.radius(), reference.radius_km);
     assert_eq!(coefficients.tide_system(), TideSystem::TideFree);
-    // C̄20 of the orekit-data default field, and its J2, in the WGS-84 ballpark.
+    // C̄20 of the orekit-data default field, and the J2 = −√5·C̄20 it
+    // implies, in the WGS-84 ballpark: ties the file's normalization to the
+    // J2 constant the rest of orts uses.
     let (c20, _) = coefficients.coefficient(2, 0).unwrap();
     assert!((c20 + 4.8416e-4).abs() < 1e-8, "C20 = {c20}");
-    assert!(
-        (coefficients.j2() - 1.0826e-3).abs() < 1e-7,
-        "J2 = {}",
-        coefficients.j2()
-    );
+    let j2 = -5.0f64.sqrt() * c20;
+    assert!((j2 - 1.0826e-3).abs() < 1e-7, "J2 = {j2}");
 }
 
 /// Every (degree, order) truncation, every sample point: acceleration and

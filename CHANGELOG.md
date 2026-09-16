@@ -1243,8 +1243,8 @@ section is subdivided by package.
   `errors` column count, `m ≤ n`, duplicates, non-finite values, `C00 = 1`,
   zero degree-1 and completeness are validated; `norm` is required and
   `max_degree` is capped at `gravity::MAX_DEGREE` = 2190) with `gm()`,
-  `radius()`, `tide_system()` (recorded, not converted), `coefficient(n, m)`,
-  `j2()`; and `gravity::SphericalHarmonicField`, a Holmes–Featherstone
+  `radius()`, `tide_system()` (recorded, not converted), `coefficient(n, m)`;
+  and `gravity::SphericalHarmonicField`, a Holmes–Featherstone
   evaluator of the non-central potential and acceleration in the body frame
   (km units) over a `degree × order` window of one shared (`Arc`) coefficient
   set — `new(coefficients, degree, order)` / `full` / `truncated` return
