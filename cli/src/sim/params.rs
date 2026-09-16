@@ -149,6 +149,14 @@ pub(crate) fn ensure_body_carries_an_element_set(body: KnownBody) -> Result<(), 
     ))
 }
 
+/// `--epoch` / `epoch =` as an [`Epoch`], with the message both constructors
+/// used to panic with.
+fn parse_epoch(s: &str) -> Result<Epoch, String> {
+    Epoch::from_iso8601(s).ok_or_else(|| {
+        format!("Invalid epoch format: {s}. Expected ISO 8601 (e.g. 2024-03-20T12:00:00Z)")
+    })
+}
+
 /// Simulation parameters derived from CLI arguments.
 pub struct SimParams {
     pub body: KnownBody,
@@ -169,6 +177,10 @@ pub struct SimParams {
     pub f107: f64,
     pub ap: f64,
     pub space_weather_provider: Option<Arc<tobari::CssiSpaceWeather>>,
+    /// Spherical-harmonic gravity field (`--gravity-field` / `[gravity_field]`),
+    /// already truncated. `Some` replaces `ZonalGravity` and is where `mu`
+    /// came from. Shared by every satellite's system (`Arc`).
+    pub gravity_field: Option<Arc<tobari::gravity::SphericalHarmonicField>>,
     /// User-selected plugin backend from the CLI (or `Auto`).
     /// Only consulted when `plugin-wasm` is enabled.
     #[cfg_attr(not(feature = "plugin-wasm"), allow(dead_code))]
@@ -228,6 +240,12 @@ impl SimParams {
         }
     }
 
+    /// The gravity field to hand to `orts::setup`, if one is configured
+    /// (a cheap `Arc` clone: the coefficients are shared, not copied).
+    pub fn gravity_field(&self) -> Option<Arc<tobari::gravity::SphericalHarmonicField>> {
+        self.gravity_field.clone()
+    }
+
     /// Build an atmosphere model from the current parameters.
     pub fn build_atmosphere_model(&self) -> Option<Box<dyn tobari::AtmosphereModel>> {
         match self.atmosphere {
@@ -248,18 +266,31 @@ impl SimParams {
 impl SimParams {
     /// Build SimParams from CLI arguments.
     /// `is_serve`: when true and no orbit args are given, defaults to SSO+ISS.
-    pub fn from_sim_args(args: &SimArgs, is_serve: bool) -> Self {
+    ///
+    /// Loads the resources the arguments name (`--gravity-field`) itself, so
+    /// a missing or malformed file is an `Err` here rather than a panic — the
+    /// same constructor serves `orts run`, `orts serve` and the tests, and a
+    /// resource added later is a new load inside, not a new parameter at
+    /// every call site.
+    // TODO: the orbit-argument conflicts (`--sat` next to `--tle`, …) and
+    // `--space-weather` still panic; folding them into this `Result` is a
+    // behaviour change for `serve`'s legacy path and is left to its own change.
+    pub fn from_sim_args(args: &SimArgs, is_serve: bool) -> Result<Self, String> {
         let body = parse_body(&args.body);
-        let mu = body.properties().mu;
+        let gravity_field = Self::load_gravity_field(
+            args.gravity_field.as_deref(),
+            args.gravity_degree,
+            args.gravity_order,
+        )?;
+        // `mu` is the field's GM when one is configured, and it sizes every
+        // satellite's period and initial state below — so it is resolved
+        // before the satellites.
+        let mu = Self::resolve_mu(body, gravity_field.as_deref());
 
         // An explicit `--epoch` wins; `None` defers the default — a TLE/OMM
         // orbit without `--epoch` starts at its element-set epoch (resolved
         // after the satellites are built, below).
-        let epoch = args.epoch.as_ref().map(|s| {
-            Epoch::from_iso8601(s).unwrap_or_else(|| {
-                panic!("Invalid epoch format: {s}. Expected ISO 8601 (e.g. 2024-03-20T12:00:00Z)")
-            })
-        });
+        let epoch = args.epoch.as_ref().map(|s| parse_epoch(s)).transpose()?;
 
         let satellites = if !args.sats.is_empty() {
             // --sat flags provided: parse each spec
@@ -277,7 +308,7 @@ impl SimParams {
                 .iter()
                 .enumerate()
                 .map(|(i, s)| {
-                    let mut spec = parse_sat_spec(s, body);
+                    let mut spec = parse_sat_spec(s, body, mu);
                     if spec.id.is_empty() || spec.id == "auto" {
                         spec.id = format!("sat-{i}");
                     }
@@ -336,9 +367,9 @@ impl SimParams {
             .or_else(|| element_set_epoch(&satellites))
             .or_else(|| Some(Epoch::now()));
 
-        validate_element_set_body(body, &satellites).unwrap_or_else(|e| panic!("{e}"));
+        validate_element_set_body(body, &satellites)?;
 
-        Self {
+        Ok(Self {
             body,
             mu,
             dt: args.dt,
@@ -359,24 +390,33 @@ impl SimParams {
             f107: args.f107,
             ap: args.ap,
             space_weather_provider: Self::load_space_weather(args.space_weather.as_deref()),
+            gravity_field,
             plugin_backend_choice: args.plugin_backend,
             plugin_backend_threshold: args.plugin_backend_threshold,
             plugin_backend_async_mode: args.plugin_backend_async_mode,
-        }
+        })
     }
 
     /// Build SimParams from a config file.
-    pub fn from_config(config: &SimConfig) -> Self {
+    ///
+    /// Loads `[gravity_field]` itself; a missing or malformed file is an
+    /// `Err`, so `orts serve` can refuse it on the main task instead of
+    /// panicking inside the spawned manager (which would leave the server up
+    /// with nobody behind the command channel). A WebSocket
+    /// `start_simulation` cannot carry `[gravity_field]`
+    /// (`serve::manager::validate_sim_config` rejects it).
+    pub fn from_config(config: &SimConfig) -> Result<Self, String> {
         let body = config.known_body();
-        let mu = body.properties().mu;
+        let gravity_field = match &config.gravity_field {
+            Some(gf) => Self::load_gravity_field(Some(&gf.path), gf.degree, gf.order)?,
+            None => None,
+        };
+        // Field before `mu`: see `from_sim_args`.
+        let mu = Self::resolve_mu(body, gravity_field.as_deref());
 
         // `None` defers the default; resolved from the element-set epoch after
         // the satellites are built (see `from_sim_args`).
-        let epoch = config.epoch.as_ref().map(|s| {
-            Epoch::from_iso8601(s).unwrap_or_else(|| {
-                panic!("Invalid epoch format: {s}. Expected ISO 8601 (e.g. 2024-03-20T12:00:00Z)")
-            })
-        });
+        let epoch = config.epoch.as_ref().map(|s| parse_epoch(s)).transpose()?;
 
         let satellites: Vec<SatelliteSpec> = config
             .satellites
@@ -399,9 +439,9 @@ impl SimParams {
             .or_else(|| element_set_epoch(&satellites))
             .or_else(|| Some(Epoch::now()));
 
-        validate_element_set_body(body, &satellites).unwrap_or_else(|e| panic!("{e}"));
+        validate_element_set_body(body, &satellites)?;
 
-        Self {
+        Ok(Self {
             body,
             mu,
             dt: config.dt,
@@ -425,12 +465,48 @@ impl SimParams {
             f107: config.f107,
             ap: config.ap,
             space_weather_provider: Self::load_space_weather(config.space_weather.as_deref()),
+            gravity_field,
             // Config-file path: no CLI override, use defaults. The
             // auto selection logic falls back to its derived threshold.
             plugin_backend_choice: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
-        }
+        })
+    }
+
+    /// The simulation's μ: the gravity field's GM when one is configured
+    /// (the point mass and the harmonics are one model), else the body's.
+    fn resolve_mu(body: KnownBody, field: Option<&tobari::gravity::SphericalHarmonicField>) -> f64 {
+        field.map_or_else(|| body.properties().mu, |f| f.gm())
+    }
+
+    /// Load a spherical-harmonic gravity field from an ICGEM `.gfc` path as a
+    /// `degree × order` window; `Ok(None)` when no path is given.
+    ///
+    /// `degree` is handed to the parser as its cap, so a 70×70 request on the
+    /// degree-2190 EGM2008 file reads and allocates the 70×70 set only;
+    /// `None` reads the whole file. A degree the file does not carry, an
+    /// order above the degree, or a degree below 2 is an error rather than a
+    /// silent clamp.
+    ///
+    fn load_gravity_field(
+        path: Option<&str>,
+        degree: Option<usize>,
+        order: Option<usize>,
+    ) -> Result<Option<Arc<tobari::gravity::SphericalHarmonicField>>, String> {
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let coefficients = tobari::gravity::SphericalHarmonicCoefficients::from_icgem_file(
+            std::path::Path::new(path),
+            degree,
+        )
+        .map_err(|e| format!("Failed to load gravity field {path}: {e}"))?;
+        let degree = degree.unwrap_or(coefficients.max_degree());
+        let order = order.unwrap_or(degree);
+        let field = tobari::gravity::SphericalHarmonicField::new(coefficients, degree, order)
+            .map_err(|e| format!("gravity field truncation {degree}x{order}: {e}"))?;
+        Ok(Some(Arc::new(field)))
     }
 
     /// Load space weather provider from a source string.
@@ -627,7 +703,7 @@ mod tests {
         let mut args = sim_args_for_period_tests();
         args.sats = vec!["altitude=400".to_string()];
 
-        let without = SimParams::from_sim_args(&args, false);
+        let without = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!(
             (without.satellites[0].period - PERIOD_400KM).abs() < 1.0,
             "period without --duration: {}",
@@ -635,7 +711,7 @@ mod tests {
         );
 
         args.duration = Some(120.0);
-        let with = SimParams::from_sim_args(&args, false);
+        let with = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!(
             (with.satellites[0].period - PERIOD_400KM).abs() < 1.0,
             "--duration 120 changed the orbital period to {}",
@@ -665,7 +741,7 @@ orbit = { type = "circular", altitude = 400 }
 "#,
         )
         .expect("the fixture config parses");
-        let params = SimParams::from_config(&config);
+        let params = SimParams::from_config(&config).expect("valid config");
 
         assert!(
             (params.satellites[0].period - PERIOD_400KM).abs() < 1.0,
@@ -688,7 +764,7 @@ orbit = { type = "circular", altitude = 400 }
             "altitude=800,id=high".to_string(),
         ];
         args.duration = Some(120.0);
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
 
         let (low, high) = (&params.satellites[0], &params.satellites[1]);
         assert!(
@@ -721,6 +797,9 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
@@ -750,13 +829,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!((params.output_interval - 10.0).abs() < 1e-9);
         assert!((params.stream_interval - 10.0).abs() < 1e-9);
         // Defaults to Epoch::now() for known bodies
@@ -784,13 +866,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!((params.dt - 1.0).abs() < 1e-9);
         assert!((params.output_interval - 10.0).abs() < 1e-9);
         assert!((params.stream_interval - 2.0).abs() < 1e-9);
@@ -818,13 +903,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!((params.stream_interval - 5.0).abs() < 1e-9);
 
         // stream_interval > output_interval → clamped to output_interval
@@ -847,13 +935,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params2 = SimParams::from_sim_args(&args2, false);
+        let params2 = SimParams::from_sim_args(&args2, false).expect("valid args");
         assert!((params2.stream_interval - 10.0).abs() < 1e-9);
     }
 
@@ -878,13 +969,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!(params.epoch.is_some());
         let epoch = params.epoch.unwrap();
         // 2024-03-20 12:00:00 UTC
@@ -917,13 +1011,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        SimParams::from_sim_args(&args, false);
+        SimParams::from_sim_args(&args, false).expect("valid args");
     }
 
     #[test]
@@ -951,13 +1048,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
 
         // Should have one satellite in TLE mode
         assert_eq!(params.satellites.len(), 1);
@@ -965,7 +1065,7 @@ orbit = { type = "circular", altitude = 400 }
         assert!(matches!(sat.orbit, OrbitSpec::ElementSet { .. }));
 
         // Altitude should be ~400 km
-        let alt = sat.altitude(&params.body);
+        let alt = sat.altitude(&params.body, params.mu);
         assert!((alt - 400.0).abs() < 30.0, "ISS altitude: {:.1} km", alt);
 
         // Period should be ~92 minutes
@@ -1007,18 +1107,21 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
 
         assert_eq!(params.satellites.len(), 1);
         let sat = &params.satellites[0];
         assert!(matches!(sat.orbit, OrbitSpec::ElementSet { .. }));
-        let alt = sat.altitude(&params.body);
+        let alt = sat.altitude(&params.body, params.mu);
         assert!(
             (alt - 400.0).abs() < 30.0,
             "ISS altitude from OMM JSON: {alt:.1} km"
@@ -1050,13 +1153,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         let state = params.satellites[0]
             .initial_state(params.mu, params.epoch)
             .unwrap();
@@ -1099,13 +1205,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert!(matches!(
             params.satellites[0].orbit,
             OrbitSpec::ElementSet { .. }
@@ -1144,13 +1253,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
 
         // Epoch should be overridden to 2025-01-01
         let epoch = params.epoch.unwrap();
@@ -1184,13 +1296,16 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, false);
+        let params = SimParams::from_sim_args(&args, false).expect("valid args");
         assert_eq!(params.satellites.len(), 2);
         assert_eq!(params.satellites[0].id, "sso");
         assert_eq!(params.satellites[1].id, "leo");
@@ -1218,15 +1333,158 @@ orbit = { type = "circular", altitude = 400 }
             f107: 150.0,
             ap: 15.0,
             space_weather: None,
+            gravity_field: None,
+            gravity_degree: None,
+            gravity_order: None,
             duration: None,
             config: None,
             plugin_backend: PluginBackendChoice::Auto,
             plugin_backend_threshold: None,
             plugin_backend_async_mode: PluginAsyncModeChoice::Deterministic,
         };
-        let params = SimParams::from_sim_args(&args, true);
+        let params = SimParams::from_sim_args(&args, true).expect("valid args");
         // Should have at least SSO satellite
         assert!(!params.satellites.is_empty());
         assert!(params.satellites.iter().any(|s| s.id == "sso"));
+    }
+
+    // --- gravity field ---------------------------------------------------
+
+    const GFC_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tobari/tests/fixtures/orekit_geopotential_70x70.gfc"
+    );
+
+    fn config_with_field(degree: &str) -> SimConfig {
+        toml::from_str(&format!(
+            r#"
+body = "earth"
+dt = 10.0
+epoch = "2024-03-20T12:00:00Z"
+
+[gravity_field]
+path = '{GFC_FIXTURE}'
+{degree}
+
+[[satellites]]
+id = "a"
+orbit = {{ type = "circular", altitude = 570 }}
+"#
+        ))
+        .expect("valid toml")
+    }
+
+    /// With a field, `mu` is the field's GM (EGM-class 398600.4415, not
+    /// WGS-84's 398600.4418) — and it is resolved *before* the satellites, so
+    /// the circular orbit's period is sized with it.
+    #[test]
+    fn gravity_field_sets_mu_to_the_fields_gm_before_satellites() {
+        let params = SimParams::from_config(&config_with_field("degree = 20\norder = 20")).unwrap();
+        let field = params.gravity_field.as_ref().expect("field loaded");
+        assert_eq!(params.mu, field.gm());
+        assert_eq!(params.mu, 398600.4415);
+        assert_ne!(params.mu, KnownBody::Earth.properties().mu);
+        assert_eq!((field.degree(), field.order()), (20, 20));
+        // Period sized with the field's GM, not WGS-84's.
+        let r = KnownBody::Earth.properties().radius + 570.0;
+        let expected = 2.0 * std::f64::consts::PI * (r * r * r / params.mu).sqrt();
+        assert!((params.satellites[0].period - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gravity_field_truncation_defaults_to_the_files_degree_and_order_to_degree() {
+        let params = SimParams::from_config(&config_with_field("")).unwrap();
+        let field = params.gravity_field.as_ref().unwrap();
+        assert_eq!((field.degree(), field.order()), (70, 70));
+        let params = SimParams::from_config(&config_with_field("degree = 8")).unwrap();
+        let field = params.gravity_field.as_ref().unwrap();
+        assert_eq!((field.degree(), field.order()), (8, 8));
+    }
+
+    #[test]
+    fn no_gravity_field_keeps_the_bodys_mu() {
+        let cfg: SimConfig = toml::from_str(
+            r#"
+[[satellites]]
+id = "a"
+orbit = { type = "circular", altitude = 570 }
+"#,
+        )
+        .unwrap();
+        let params = SimParams::from_config(&cfg).unwrap();
+        assert!(params.gravity_field.is_none());
+        assert_eq!(params.mu, KnownBody::Earth.properties().mu);
+    }
+
+    /// A missing file is an `Err` from the constructor — `orts serve` builds
+    /// its `SimParams` on the main task and must be able to refuse it — not a
+    /// panic.
+    #[test]
+    fn missing_gravity_field_file_is_an_error_not_a_panic() {
+        let cfg: SimConfig = toml::from_str(
+            r#"
+[gravity_field]
+path = "/nonexistent/EGM.gfc"
+
+[[satellites]]
+id = "a"
+orbit = { type = "circular", altitude = 570 }
+"#,
+        )
+        .unwrap();
+        let err = match SimParams::from_config(&cfg) {
+            Ok(_) => panic!("a missing file must not build parameters"),
+            Err(e) => e,
+        };
+        assert!(err.contains("Failed to load gravity field"), "{err}");
+        assert!(err.contains("/nonexistent/EGM.gfc"), "{err}");
+    }
+
+    #[test]
+    fn load_gravity_field_reports_instead_of_panicking() {
+        assert!(
+            SimParams::load_gravity_field(None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        let field = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(8), Some(8))
+            .unwrap()
+            .expect("a field");
+        assert_eq!((field.degree(), field.order()), (8, 8));
+        let missing =
+            SimParams::load_gravity_field(Some("/nonexistent/EGM.gfc"), None, None).unwrap_err();
+        assert!(missing.contains("/nonexistent/EGM.gfc"), "{missing}");
+        let bad = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(8), Some(9)).unwrap_err();
+        assert!(bad.contains("order 9 exceeds degree 8"), "{bad}");
+        // More than the file carries is an error, not a clamp to 70×70.
+        let too_high =
+            SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(71), None).unwrap_err();
+        assert!(
+            too_high.contains("degree 71 requested") && too_high.contains("max_degree 70"),
+            "{too_high}"
+        );
+        let too_low = SimParams::load_gravity_field(Some(GFC_FIXTURE), Some(1), None).unwrap_err();
+        assert!(too_low.contains("starts at degree 2"), "{too_low}");
+    }
+
+    /// The CLI spelling loads the same window as the config table, through
+    /// the one constructor, and a bad flag is an `Err` there too.
+    #[test]
+    fn from_sim_args_loads_the_gravity_field_itself() {
+        let mut args = sim_args_for_period_tests();
+        args.sats = vec!["altitude=570".to_string()];
+        args.gravity_field = Some(GFC_FIXTURE.to_string());
+        args.gravity_degree = Some(8);
+        let params = SimParams::from_sim_args(&args, false).expect("fixture loads");
+        let field = params.gravity_field.as_ref().expect("a field");
+        assert_eq!((field.degree(), field.order()), (8, 8));
+        assert_eq!(params.mu, 398600.4415);
+
+        args.gravity_field = Some("/nonexistent/EGM.gfc".to_string());
+        let err = match SimParams::from_sim_args(&args, false) {
+            Ok(_) => panic!("a missing file must not build parameters"),
+            Err(e) => e,
+        };
+        assert!(err.contains("/nonexistent/EGM.gfc"), "{err}");
     }
 }

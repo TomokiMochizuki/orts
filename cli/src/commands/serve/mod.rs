@@ -181,6 +181,9 @@ fn unhonored_sim_args(sim: &SimArgs) -> Vec<&'static str> {
         ("--f107", sim.f107 != default.f107),
         ("--ap", sim.ap != default.ap),
         ("--space-weather", sim.space_weather.is_some()),
+        ("--gravity-field", sim.gravity_field.is_some()),
+        ("--gravity-degree", sim.gravity_degree.is_some()),
+        ("--gravity-order", sim.gravity_order.is_some()),
     ]
     .into_iter()
     .filter_map(|(flag, differs)| differs.then_some(flag))
@@ -293,10 +296,19 @@ async fn async_server(
         textures::spawn_texture_downloader(Arc::clone(&texture_cache), tx.clone());
     let bridge = Arc::new(StreamBridge::new());
 
-    // Spawn simulation manager
+    // The initial simulation (`--config`, or orbit arguments on the legacy
+    // path) gets its `SimParams` built here, on the main task, so a bad
+    // `[gravity_field]` / `--gravity-field` file is a fatal configuration
+    // error. Inside the spawned manager it would only kill that task and
+    // leave the HTTP / WebSocket server up with nobody behind the command
+    // channel.
     let mgr_tx = tx.clone();
     let plugin_overrides = manager::PluginBackendOverrides::from_sim_args(sim);
-    if has_explicit_sim_args(sim) && initial_config.is_none() {
+    let initial_params = if let Some(cfg) = &initial_config {
+        let mut params = SimParams::from_config(cfg).map_err(CmdError::failure)?;
+        plugin_overrides.apply(&mut params);
+        Some(params)
+    } else if has_explicit_sim_args(sim) {
         // Legacy path: build SimParams from CLI args directly.
         // from_sim_args already populates plugin_backend_choice /
         // threshold, but we still pass the overrides so that any
@@ -304,25 +316,33 @@ async fn async_server(
         // restart) honors them too.
         // Same reason as in `run`: this path skips `SimConfig::validate`.
         crate::commands::run::validate_sim_args(sim)?;
-        let params = Arc::new(SimParams::from_sim_args(sim, true));
-        crate::satellite::ensure_unique_ids(&params.satellites)?;
-        tokio::spawn(manager::simulation_manager_with_params(
-            params,
-            plugin_overrides,
-            cmd_rx,
-            mgr_tx,
-            texture_request_tx.clone(),
-            Arc::clone(&bridge),
-        ));
+        Some(SimParams::from_sim_args(sim, true).map_err(CmdError::failure)?)
     } else {
-        tokio::spawn(manager::simulation_manager(
-            initial_config,
-            plugin_overrides,
-            cmd_rx,
-            mgr_tx,
-            texture_request_tx.clone(),
-            Arc::clone(&bridge),
-        ));
+        None
+    };
+    match initial_params {
+        Some(params) => {
+            let params = Arc::new(params);
+            crate::satellite::ensure_unique_ids(&params.satellites)?;
+            tokio::spawn(manager::simulation_manager_with_params(
+                params,
+                plugin_overrides,
+                cmd_rx,
+                mgr_tx,
+                texture_request_tx.clone(),
+                Arc::clone(&bridge),
+            ));
+        }
+        None => {
+            tokio::spawn(manager::simulation_manager(
+                None,
+                plugin_overrides,
+                cmd_rx,
+                mgr_tx,
+                texture_request_tx.clone(),
+                Arc::clone(&bridge),
+            ));
+        }
     }
 
     // The stdio plug task drives stdin/stdout with the kble-socket protocol
@@ -616,5 +636,26 @@ mod tests {
             crate::commands::run::validate_sim_args(&args(&["--dt", "NaN"])).is_err(),
             "a non-finite dt is refused"
         );
+    }
+
+    /// The gravity-field flags reach a simulation only through
+    /// `from_sim_args`, so `serve --config` must name them rather than run the
+    /// zonal model behind an explicit `--gravity-field`.
+    #[test]
+    fn gravity_field_flags_are_named_when_unhonored() {
+        assert_eq!(
+            unhonored_sim_args(&args(&[
+                "--gravity-field",
+                "x.gfc",
+                "--gravity-degree",
+                "8",
+                "--gravity-order",
+                "8",
+            ])),
+            vec!["--gravity-field", "--gravity-degree", "--gravity-order"]
+        );
+        let err = refusal(&["--config", "mission.toml", "--gravity-field", "x.gfc"])
+            .expect("serve --config must refuse the flag");
+        assert!(err.contains("--gravity-field"), "{err}");
     }
 }

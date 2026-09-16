@@ -136,6 +136,11 @@ section is subdivided by package.
   the area from the half-extents, and `SpacecraftShape::cube`'s six faces now
   carry theirs — their own forces are unchanged, but a panel added beside the
   cube can be found behind a face. ([#424](https://github.com/sksat/orts/pull/424))
+- **BREAKING**: `setup::build_orbital_system` / `build_spacecraft_dynamics`
+  take a trailing `gravity_field: Option<Arc<SphericalHarmonicField>>`:
+  `Some` installs `SphericalHarmonicGravity` (Earth only, epoch required,
+  `mu` must equal the field's GM — asserted), `None` keeps `ZonalGravity`.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `SatelliteParams` carries an optional `SpacecraftShape`, and
   `build_spacecraft_dynamics` installs `PanelSrp` and `PanelDrag` from it in
   place of the isotropic `SolarRadiationPressure` and `AtmosphericDrag`. The
@@ -503,6 +508,16 @@ section is subdivided by package.
 ### `orts-cli` (Rust, crates.io, binary)
 
 #### Added
+- `[gravity_field]` config table (`path`, `degree`, `order`) and
+  `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]` on `run` /
+  `serve`: install a full spherical-harmonic geopotential from an ICGEM `.gfc`
+  file in place of the J2/J3/J4 zonal model, and use the file's GM as the
+  simulation's μ (initial states, derived energy, CSV/RRD metadata, WS
+  `info`). Earth only; `degree >= 2`, `order <= degree` are checked by
+  `config validate`, the file is opened at run time. Not accepted over the
+  WebSocket `start_simulation` (it names a server-side file). The propagation
+  frame stays `SimpleEci`, so the field is rotated by ERA only.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `[[satellites.panels]]` gives a satellite a flat-panel outer surface, with
   `area` or `half_extent` + `in_plane_x` ([#424](https://github.com/sksat/orts/pull/424)), `normal`, `cd`,
   `specular`, `diffuse`, `cp_offset`, `two_sided`

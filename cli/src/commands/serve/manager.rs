@@ -225,6 +225,16 @@ fn validate_sim_config(config: &SimConfig) -> Result<(), String> {
     // `orts serve --config` rejects must not slip in through a WebSocket
     // `start_simulation` and have its uplinks dropped instead.
     config.ensure_serve_supported()?;
+    // `[gravity_field]` names a file on the server's filesystem. A WebSocket
+    // client must not be able to make the server open arbitrary paths (or
+    // panic on a missing one), so the field is CLI / config-file only.
+    if config.gravity_field.is_some() {
+        return Err(
+            "gravity_field is not accepted over WebSocket: start `orts serve` with \
+                    `--gravity-field <PATH>` or a `--config` file carrying `[gravity_field]`"
+                .to_string(),
+        );
+    }
 
     let body = crate::satellite::parse_body(&config.body);
     let mu = body.properties().mu;
@@ -235,8 +245,8 @@ fn validate_sim_config(config: &SimConfig) -> Result<(), String> {
         .map(|(i, s)| s.to_satellite_spec(i, body, mu))
         .collect();
     // SGP4/TEME is Earth-centered: reject a non-Earth TLE/OMM config here so a
-    // WebSocket `StartSimulation` returns an error to the client instead of
-    // reaching the panic in `SimParams::from_config`.
+    // WebSocket `StartSimulation` returns an error to the client at the
+    // `start_simulation` reply, before `SimParams::from_config` runs.
     crate::sim::params::validate_element_set_body(body, &specs)?;
     // Reject fleets that no single mode can honor (mixed attitude / mixed
     // controller) with the same rule `ServeEngine::build` and `orts run` use,
@@ -308,7 +318,18 @@ pub(super) async fn simulation_manager(
 
     // Main manager loop: start simulation, run until terminated, return to idle.
     while let Some(config) = next_config {
-        let mut params_inner = SimParams::from_config(&config);
+        // `validate_sim_config` has already refused what `from_config` cannot
+        // build (a non-Earth element set, a `[gravity_field]` over WebSocket),
+        // so an `Err` here is unexpected — but the manager task must survive
+        // it, so report it and wait for the next `start_simulation`.
+        let mut params_inner = match SimParams::from_config(&config) {
+            Ok(params) => params,
+            Err(e) => {
+                eprintln!("Simulation manager: cannot start simulation: {e}");
+                next_config = idle_loop(&mut cmd_rx).await;
+                continue;
+            }
+        };
         cli_plugin_overrides.apply(&mut params_inner);
         let params = Arc::new(params_inner);
 
@@ -742,5 +763,24 @@ attitude = { inertia_diag = [10, 10, 10], mass = 50 }
                 "Earth config tripped the body guard: {e}"
             );
         }
+    }
+
+    /// `[gravity_field]` names a server-side file, so a WebSocket client must
+    /// not be able to set it.
+    #[test]
+    fn ws_start_rejects_gravity_field() {
+        let config: SimConfig = toml::from_str(
+            r#"
+[gravity_field]
+path = "/etc/passwd"
+
+[[satellites]]
+id = "a"
+orbit = { type = "circular", altitude = 500 }
+"#,
+        )
+        .expect("valid test toml");
+        let err = validate_sim_config(&config).unwrap_err();
+        assert!(err.contains("not accepted over WebSocket"), "got: {err}");
     }
 }

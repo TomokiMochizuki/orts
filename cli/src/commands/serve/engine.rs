@@ -583,6 +583,7 @@ impl ServeEngine {
                     &sat_params(spec),
                     &third_bodies,
                     params.build_atmosphere_model(),
+                    params.gravity_field(),
                 )
                 .map_err(|e| format!("solar force models: {e}"))?;
                 let initial = spec
@@ -1114,6 +1115,7 @@ impl ServeEngine {
             &sat_params(&spec),
             &third_bodies,
             self.params.build_atmosphere_model(),
+            self.params.gravity_field(),
         )
         .map_err(|e| format!("solar force models: {e}"))?;
         // Evaluate the initial state at the instant the satellite enters the
@@ -1134,7 +1136,7 @@ impl ServeEngine {
         let sat_info = SatelliteInfo {
             id: spec.entity_path().to_string(),
             name: spec.name.clone(),
-            altitude: spec.altitude(&self.params.body),
+            altitude: spec.altitude(&self.params.body, self.params.mu),
             period: spec.period,
             perturbations,
             shape: spec.shape,
@@ -1288,7 +1290,7 @@ impl ServeEngine {
         let sat_info = SatelliteInfo {
             id: spec.entity_path().to_string(),
             name: spec.name.clone(),
-            altitude: spec.altitude(&self.params.body),
+            altitude: spec.altitude(&self.params.body, self.params.mu),
             period: spec.period,
             perturbations,
             shape: spec.shape,
@@ -1388,6 +1390,7 @@ fn build_info_message(params: &SimParams) -> Result<WsMessage, String> {
                     &sat_params(s),
                     &third_bodies,
                     params.build_atmosphere_model(),
+                    params.gravity_field(),
                 )
                 .map_err(|e| format!("solar force models: {e}"))?
                 .model_names()
@@ -1398,7 +1401,7 @@ fn build_info_message(params: &SimParams) -> Result<WsMessage, String> {
             Ok(SatelliteInfo {
                 id: s.entity_path().to_string(),
                 name: s.name.clone(),
-                altitude: s.altitude(&params.body),
+                altitude: s.altitude(&params.body, params.mu),
                 period: s.period,
                 perturbations,
                 shape: s.shape,
@@ -1475,7 +1478,7 @@ mod tests {
     /// no broadcast channel, and no stream bridge.
     fn engine_from_toml(toml: &str) -> Result<EngineInit, String> {
         let config: crate::config::SimConfig = toml::from_str(toml).expect("valid test toml");
-        let params = Arc::new(SimParams::from_config(&config));
+        let params = Arc::new(SimParams::from_config(&config).expect("valid test config"));
         let data_dir = std::env::temp_dir().join(format!(
             "orts-engine-test-{}-{:?}",
             std::process::id(),
@@ -1633,6 +1636,8 @@ orbit = { type = "circular", altitude = 50 }
             },
             &[],
             nalgebra::Matrix3::identity() * 10.0,
+            None,
+            // No spherical-harmonic field: these fixtures are the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");
@@ -1903,7 +1908,7 @@ attitude = { inertia_diag = [10, 20, 30], mass = 50 }
 "#;
         for toml in [ORBIT_ONLY, ATTITUDE] {
             let config: crate::config::SimConfig = toml::from_str(toml).expect("valid test toml");
-            let params = SimParams::from_config(&config);
+            let params = SimParams::from_config(&config).expect("valid test config");
             let mode = select_sim_mode(&params.satellites).expect("valid fleet");
             let init = engine_from_toml(toml).expect("engine builds");
             let group_mode = match init.engine.group {
@@ -2230,6 +2235,8 @@ cp_offset = [0.0, 0.0, 1.5]
             &[],
             inertia,
             None,
+            // No spherical-harmonic field: these fixtures are the zonal path.
+            None,
         )
         .expect("Earth has a Sun ephemeris");
 
@@ -2498,5 +2505,35 @@ orbit = { type = "circular", altitude = 500 }
             .err()
             .expect("an id naming an entity already in the fleet must be refused");
         assert!(err.contains("unique"), "got: {err}");
+    }
+
+    /// `[gravity_field]` swaps the oblateness model: the spherical-harmonic
+    /// field is installed and the zonal one is not (both carry J2).
+    #[test]
+    fn serve_installs_the_gravity_field_instead_of_zonal_gravity() {
+        let toml = format!(
+            r#"
+epoch = "2024-03-20T12:00:00Z"
+
+[gravity_field]
+path = '{}'
+degree = 8
+
+[[satellites]]
+id = "sat-a"
+orbit = {{ type = "circular", altitude = 500 }}
+attitude = {{ inertia_diag = [10, 20, 30], mass = 50 }}
+"#,
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tobari/tests/fixtures/orekit_geopotential_70x70.gfc"
+            )
+        );
+        let names = serve_model_names(&toml);
+        assert!(
+            names.iter().any(|n| n == "spherical_harmonic_gravity"),
+            "{names:?}"
+        );
+        assert!(!names.iter().any(|n| n == "zonal_gravity"), "{names:?}");
     }
 }

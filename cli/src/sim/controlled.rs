@@ -968,6 +968,8 @@ mod tests {
             &[],
             inertia,
             None,
+            // No spherical-harmonic field: this fixture is the zonal path.
+            None,
         )
         .expect("Earth has a Sun ephemeris");
 
@@ -1170,7 +1172,7 @@ mod tests {
     fn params_with(integrator: crate::cli::IntegratorChoice, dt: f64, tol: f64) -> SimParams {
         use clap::Parser;
         let args = crate::cli::SimArgs::parse_from(["orts"]);
-        let mut params = SimParams::from_sim_args(&args, false);
+        let mut params = SimParams::from_sim_args(&args, false).expect("default args are valid");
         params.integrator = integrator;
         params.dt = dt;
         params.tolerances = utsuroi::Tolerances {
@@ -1757,7 +1759,7 @@ path = "does-not-exist.wasm"
 
         let build = |body: &str| {
             let config = config_for(body);
-            let params = SimParams::from_config(&config);
+            let params = SimParams::from_config(&config).expect("valid test config");
             let spec = params.satellites[0].clone();
             #[cfg(feature = "plugin-wasm")]
             let mut cache =

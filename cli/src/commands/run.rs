@@ -15,6 +15,7 @@ use orts::visibility::{StationContact, VisibilityMonitor};
 
 use crate::cli::{IntegratorChoice, OutputFormat, SimArgs};
 use crate::commands::CmdError;
+use crate::config::GravityFieldNames;
 use crate::satellite::OrbitSpec;
 use crate::sim::mode::{
     SimMode, ensure_commands_deliverable, ensure_streams_unused, select_sim_mode,
@@ -36,7 +37,63 @@ pub(crate) fn validate_sim_args(sim: &SimArgs) -> Result<(), String> {
         sim.stream_interval,
         sim.duration,
     )?;
-    crate::config::validate_tolerances(sim.integrator, sim.atol, sim.rtol)
+    crate::config::validate_tolerances(sim.integrator, sim.atol, sim.rtol)?;
+    validate_gravity_args(sim)
+}
+
+/// The gravity flags written on a `run` command line that a config will not
+/// read, named as written.
+fn gravity_flags_given(sim: &SimArgs) -> Vec<&'static str> {
+    [
+        ("--gravity-field", sim.gravity_field.is_some()),
+        ("--gravity-degree", sim.gravity_degree.is_some()),
+        ("--gravity-order", sim.gravity_order.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(flag, given)| given.then_some(flag))
+    .collect()
+}
+
+/// A config-backed `run` builds its parameters from the config alone, so a
+/// gravity flag next to `--config` (or an auto-detected `orts.toml`) would be
+/// dropped in silence and the run would use the zonal model behind an explicit
+/// request. Refuse it, the way `serve` refuses every unhonored sim arg.
+// TODO: the other tuning flags (`--dt`, `--atmosphere`, …) are still dropped
+// silently on this path; extending `serve`'s `unhonored_sim_args` to `run` is
+// a behaviour change for existing command lines and is left to its own change.
+fn reject_gravity_flags_with_config(sim: &SimArgs, config_path: &str) -> Result<(), CmdError> {
+    let flags = gravity_flags_given(sim);
+    if flags.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::usage(format!(
+        "{} cannot be honored: `run --config {config_path}` builds its simulation from the \
+         config alone. Put a `[gravity_field]` table in the config instead, or drop the flag.",
+        flags.join(", ")
+    )))
+}
+
+/// The `[gravity_field]` rules for the flag spelling: the same structural
+/// checks `GravityFieldConfig::validate` runs for a config (Earth only,
+/// degree ≥ 2, order ≤ degree), rendered with the flag names, plus
+/// "truncation without a field" — which the config cannot express and would
+/// otherwise be dropped in silence.
+fn validate_gravity_args(sim: &SimArgs) -> Result<(), String> {
+    match &sim.gravity_field {
+        Some(path) => crate::config::GravityFieldConfig {
+            path: path.clone(),
+            degree: sim.gravity_degree,
+            order: sim.gravity_order,
+        }
+        .validate(&sim.body)
+        .map_err(|e| e.render(&GravityFieldNames::CLI_FLAGS)),
+        None if sim.gravity_degree.is_some() || sim.gravity_order.is_some() => Err(
+            "--gravity-degree / --gravity-order truncate a spherical-harmonic field: \
+             pass --gravity-field <PATH> as well, or drop them"
+                .to_string(),
+        ),
+        None => Ok(()),
+    }
 }
 
 pub fn run_simulation_cmd(
@@ -46,21 +103,23 @@ pub fn run_simulation_cmd(
     json: bool,
 ) -> Result<(), CmdError> {
     let mut params = if let Some(config_path) = &sim.config {
+        reject_gravity_flags_with_config(sim, config_path)?;
         let config =
             crate::config::load_config_reporting_unread_keys(std::path::Path::new(config_path))?;
-        SimParams::from_config(&config)
+        SimParams::from_config(&config).map_err(CmdError::failure)?
     } else if sim.has_orbit_args() {
         // The direct-CLI path bypasses `SimConfig::validate`, so apply the
         // same time/tolerance checks here rather than letting a bad `--dt`
         // hang the propagation loop or panic inside step-size control.
         validate_sim_args(sim)?;
-        SimParams::from_sim_args(sim, false)
+        SimParams::from_sim_args(sim, false).map_err(CmdError::failure)?
     } else {
         // Auto-detect orts.toml in the current directory
         let config_path = std::path::Path::new("orts.toml");
         if config_path.exists() {
+            reject_gravity_flags_with_config(sim, "orts.toml")?;
             let config = crate::config::load_config_reporting_unread_keys(config_path)?;
-            SimParams::from_config(&config)
+            SimParams::from_config(&config).map_err(CmdError::failure)?
         } else {
             return Err(CmdError::usage(
                 "no simulation configuration found.\n\
@@ -518,6 +577,7 @@ pub fn run_simulation(params: &SimParams) -> Result<Recording, CmdError> {
             &sat_params(sat),
             &third_bodies,
             params.build_atmosphere_model(),
+            params.gravity_field(),
         )
         .map_err(|e| CmdError::failure(format!("solar force models: {e}")))?;
         let initial = sat
@@ -797,7 +857,7 @@ fn sim_metadata(params: &SimParams) -> orts::record::recording::SimMetadata {
         mu: Some(params.mu),
         body_radius: Some(params.body.properties().radius),
         body_name: Some(params.body.properties().name.to_string()),
-        altitude: first_sat.map(|s| s.altitude(&params.body)),
+        altitude: first_sat.map(|s| s.altitude(&params.body, params.mu)),
         period: first_sat.map(|s| s.period),
         orbit_description: orbit_desc,
     }
@@ -2334,6 +2394,8 @@ mod tests {
             &[],
             inertia,
             None,
+            // No spherical-harmonic field: these fixtures are the zonal path.
+            None,
         )
         .expect("Earth has a Sun ephemeris");
         assert!(
@@ -2400,5 +2462,55 @@ mod tests {
             value.abs() > 1e-9,
             "the gravity-gradient torque should reach the row, got {value:e}: {row}"
         );
+    }
+
+    /// `--gravity-field` gets the `[gravity_field]` structural rules on the
+    /// direct-CLI path too, phrased as flags, before any file is opened.
+    #[test]
+    fn validate_sim_args_applies_gravity_field_rules() {
+        assert!(validate_sim_args(&args(&["--gravity-field", "x.gfc"])).is_ok());
+        let moon =
+            validate_sim_args(&args(&["--body", "moon", "--gravity-field", "x.gfc"])).unwrap_err();
+        assert!(moon.contains("Earth-only"), "{moon}");
+        let deg = validate_sim_args(&args(&[
+            "--gravity-field",
+            "x.gfc",
+            "--gravity-degree",
+            "1",
+        ]))
+        .unwrap_err();
+        assert!(deg.contains("--gravity-degree must be >= 2"), "{deg}");
+        let ord = validate_sim_args(&args(&[
+            "--gravity-field",
+            "x.gfc",
+            "--gravity-degree",
+            "8",
+            "--gravity-order",
+            "9",
+        ]))
+        .unwrap_err();
+        assert!(ord.contains("--gravity-order (9) must not exceed"), "{ord}");
+        let alone = validate_sim_args(&args(&["--gravity-degree", "8"])).unwrap_err();
+        assert!(alone.contains("pass --gravity-field"), "{alone}");
+        let empty = validate_sim_args(&args(&["--gravity-field", ""])).unwrap_err();
+        assert!(
+            empty.contains("--gravity-field must not be empty"),
+            "{empty}"
+        );
+    }
+
+    /// A config-backed run names the gravity flags it cannot honor instead of
+    /// running the zonal model behind them.
+    #[test]
+    fn config_backed_run_refuses_gravity_flags() {
+        assert!(reject_gravity_flags_with_config(&args(&[]), "m.toml").is_ok());
+        let err = reject_gravity_flags_with_config(
+            &args(&["--gravity-field", "x.gfc", "--gravity-order", "8"]),
+            "m.toml",
+        )
+        .expect_err("must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("--gravity-field, --gravity-order"), "{msg}");
+        assert!(msg.contains("run --config m.toml"), "{msg}");
     }
 }
