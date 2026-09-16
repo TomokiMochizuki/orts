@@ -135,7 +135,10 @@ fn build_system(fixtures: &FixtureFile, sc: &Scenario) -> OrbitalSystem<frame::G
 /// storage the frame needs.
 fn build_system_through_setup(fixtures: &FixtureFile, sc: &Scenario) -> OrbitalSystem<frame::Gcrs> {
     let g = &sc.force_model.gravity;
-    let field = Arc::new(load_field().truncated(g.degree, g.order));
+    let field = Arc::new(
+        SphericalHarmonicField::new(load_coefficients(), g.degree, g.order)
+            .expect("fixture window must fit the 70x70 set"),
+    );
     assert_eq!(field.gm(), fixtures.mu_km3_s2);
     let sat = orts::setup::SatelliteParams {
         has_drag: false,
