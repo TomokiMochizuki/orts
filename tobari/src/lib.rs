@@ -47,10 +47,13 @@ extern crate alloc;
 
 mod math;
 
-#[cfg(feature = "alloc")]
+// `cssi` / `gfz` read files and use `std::error::Error` / `HashSet`, so they
+// are std-only; `gravity` needs only `alloc` (the `.gfc` text parser and the
+// coefficient arrays) and is checked at that tier in CI.
+#[cfg(feature = "std")]
 pub mod cssi;
 pub mod exponential;
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub mod gfz;
 #[cfg(feature = "alloc")]
 pub mod gravity;
@@ -59,7 +62,7 @@ pub mod magnetic;
 pub mod nrlmsise00;
 pub mod space_weather;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub use cssi::{CssiData, CssiSpaceWeather, OutOfRangeBehavior};
 pub use exponential::Exponential;
 #[cfg(feature = "alloc")]
