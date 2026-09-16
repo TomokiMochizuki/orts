@@ -15,6 +15,9 @@ import {
   parseMetadataLine,
 } from "./parseCSVLine.js";
 
+/** The one frame the viewer can draw (see `parseCSVChunked`). */
+export const VIEWER_FRAME = "simple-eci";
+
 // Worker message protocol
 
 export type CSVWorkerMessage =
@@ -72,6 +75,19 @@ export function parseCSVChunked(
     }
     dataStart = i;
     break;
+  }
+
+  // The viewer applies the SimpleEci (ERA-only) Earth rotation to every
+  // state it draws; a recording propagated in another frame would get wrong
+  // ground tracks without a word, so it is refused before any point goes out.
+  // A file with no `# frame` predates the field and is `simple-eci`.
+  // TODO: pick the Earth-fixed transform from the frame instead of refusing.
+  if (metadata.frame != null && metadata.frame !== VIEWER_FRAME) {
+    emit({
+      type: "error",
+      message: `this recording was propagated in frame \`${metadata.frame}\`, but the viewer applies the SimpleEci (ERA-only) Earth rotation, so its ground tracks would be wrong. Opening \`${metadata.frame}\` recordings is not supported yet; run with --frame simple-eci for a recording the viewer can show`,
+    });
+    return;
   }
 
   // Emit metadata first. What models the file carries a torque for is only

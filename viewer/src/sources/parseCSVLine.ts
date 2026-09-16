@@ -42,6 +42,9 @@ export function parseMetadataLine(line: string, metadata: CSVMetadata): boolean 
         .filter((s) => s.length > 0);
       break;
     }
+    case "frame":
+      metadata.frame = value.trim();
+      break;
     default:
       return false;
   }
@@ -276,5 +279,6 @@ export function emptyMetadata(): CSVMetadata {
     centralBodyRadius: null,
     satelliteName: null,
     satellites: null,
+    frame: null,
   };
 }

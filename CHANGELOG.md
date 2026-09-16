@@ -535,7 +535,10 @@ section is subdivided by package.
   EOP table is refused before propagation, naming the table's and the run's
   MJD ranges: past the table the transform would hold the last row and lose
   accuracy without saying so, which only `zero` opts into explicitly. The
-  recording metadata names the frame (`# frame = gcrs`).
+  recording metadata names the frame (`# frame = gcrs`), and `orts replay`
+  refuses a recording propagated in any frame but `simple-eci`: the viewer
+  applies the ERA-only Earth rotation to everything it draws, so it would
+  show wrong ground tracks without a word.
   ([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) and
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]` on `run` /
@@ -1411,6 +1414,13 @@ section is subdivided by package.
 ### `viewer`
 
 #### Added
+- The frame a recording was propagated in is read (`# frame` in CSV,
+  `meta/sim/frame` in `.rrd`), and a recording in any frame but `simple-eci`
+  is refused with a message instead of being drawn: the viewer applies the
+  SimpleEci (ERA-only) Earth rotation to every state, so a `gcrs` recording
+  would get wrong Earth-fixed positions and ground tracks silently. A
+  recording without a frame predates the field and is `simple-eci`.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - A torque chart per disturbance model, with the three body-frame components
   overlaid. What a disturbance torque gets wrong is its direction — a spacecraft
   turned the wrong way reads the same as one turned the right way in a

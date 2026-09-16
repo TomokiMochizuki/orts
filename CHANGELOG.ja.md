@@ -428,8 +428,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   せず reject する。`auto` またはファイル指定では、伝播区間が EOP table の範囲を
   外れる run を伝播前に reject し、table と run の MJD 範囲を示す (範囲外では
   transform が末尾の行を保持して黙って精度を落とすが、それは `zero` だけが明示的に
-  選ぶもの)。recording の metadata に frame を残す (`# frame = gcrs`)。
-  ([#411](https://github.com/sksat/orts/issues/411))
+  選ぶもの)。recording の metadata に frame を残し (`# frame = gcrs`)、`orts replay`
+  は `simple-eci` 以外の frame で伝播した recording を reject する (viewer は描く
+  すべての state に ERA のみの地球回転を掛けるので、黙って誤った ground track を
+  出すことになる)。([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) と `run` / `serve` の
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]`: ICGEM `.gfc`
   の完全球面調和重力場を J2/J3/J4 の zonal model の代わりに登録し、ファイルの GM を
@@ -1178,6 +1180,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `viewer`
 
 #### Added
+- recording が伝播された frame を読み (CSV の `# frame`、`.rrd` の `meta/sim/frame`)、
+  `simple-eci` 以外の frame の recording は描かずにメッセージ付きで reject する。
+  viewer はすべての state に SimpleEci (ERA のみ) の地球回転を掛けるので、`gcrs` の
+  recording は地球固定位置と ground track が黙って誤る。frame の無い recording は
+  このフィールドより前のもので `simple-eci`。([#411](https://github.com/sksat/orts/issues/411))
 - 外乱トルクを model ごとに 1 チャートで表示し、body frame の 3 成分を重ねる。
   外乱トルクで誤るのは向きで、magnitude では反対向きに回している場合と区別が付かない。
   そのため norm ではなく x, y, z を別系列として描く。チャートは実行が持つ model
