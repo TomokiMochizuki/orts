@@ -1180,6 +1180,11 @@ section is subdivided by package.
   into, so the caller reads that state from the stepper and records it when it is
   done.
 
+  `event_check` is the one `advance_to` takes, asked in the same two places —
+  the state the walk starts from, and each ordinary step it commits — so a walk
+  can stop both where the state decides and where its caller does. A boundary is
+  neither of those places.
+
   A set pairs `&[&dyn RootEvent<Y>]` with a `&mut [RootSlot]` the caller owns, so
   how many events it holds is whatever the caller's configuration builds and the
   crate still allocates nothing. Each event switches off and on with
@@ -1192,7 +1197,7 @@ section is subdivided by package.
   for the whole search. Re-stepping RK4 across a mode switch returns a width of
   `6r/5` for a remaining distance `r`, reporting the arrival `0.2 r` late —
   measured across eight step sizes, and pinned by a test.
-  ([#508](https://github.com/sksat/orts/pull/508), [#509](https://github.com/sksat/orts/pull/509))
+  ([#508](https://github.com/sksat/orts/pull/508), [#509](https://github.com/sksat/orts/pull/509), [#510](https://github.com/sksat/orts/pull/510))
 - `Integrator::stepper`, returning a `FixedStepper` that holds its state and the
   time it belongs to and is driven towards one target time after another —
   `stepper` / `from_checked_state` / `advance_to`, the three calls the adaptive

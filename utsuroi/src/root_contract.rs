@@ -12,6 +12,8 @@
 //! passes even without a search.
 
 use core::cell::Cell;
+use core::convert::Infallible;
+use core::ops::ControlFlow;
 
 use nalgebra::Vector1;
 
@@ -365,7 +367,17 @@ trait Walker {
         t_target: f64,
         reported: &mut Vec<(f64, f64)>,
         roots: &mut RootSet<'_, <Self::Sys as DynamicalSystem>::State>,
-    ) -> Result<RootOutcome, IntegrationError>;
+    ) -> Result<RootOutcome<Infallible>, IntegrationError>;
+
+    /// Advance with a termination check the case supplies, reading the state
+    /// as a scalar so a case can be written once for every solver.
+    fn advance_checked(
+        &mut self,
+        t_target: f64,
+        reported: &mut Vec<(f64, f64)>,
+        check: &dyn Fn(f64, f64) -> ControlFlow<&'static str>,
+        roots: &mut RootSet<'_, <Self::Sys as DynamicalSystem>::State>,
+    ) -> Result<RootOutcome<&'static str>, IntegrationError>;
 
     fn t(&self) -> f64;
     fn y(&self) -> f64;
@@ -383,9 +395,29 @@ where
         t_target: f64,
         reported: &mut Vec<(f64, f64)>,
         roots: &mut RootSet<'_, S::State>,
-    ) -> Result<RootOutcome, IntegrationError> {
-        self.advance_to_roots(t_target, |t, y| reported.push((t, y.scalar())), roots)
+    ) -> Result<RootOutcome<Infallible>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |_, _| ControlFlow::Continue(()),
+            roots,
+        )
     }
+    fn advance_checked(
+        &mut self,
+        t_target: f64,
+        reported: &mut Vec<(f64, f64)>,
+        check: &dyn Fn(f64, f64) -> ControlFlow<&'static str>,
+        roots: &mut RootSet<'_, S::State>,
+    ) -> Result<RootOutcome<&'static str>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |t, y| check(t, y.scalar()),
+            roots,
+        )
+    }
+
     fn t(&self) -> f64 {
         FixedStepper::t(self)
     }
@@ -406,9 +438,29 @@ where
         t_target: f64,
         reported: &mut Vec<(f64, f64)>,
         roots: &mut RootSet<'_, S::State>,
-    ) -> Result<RootOutcome, IntegrationError> {
-        self.advance_to_roots(t_target, |t, y| reported.push((t, y.scalar())), roots)
+    ) -> Result<RootOutcome<Infallible>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |_, _| ControlFlow::Continue(()),
+            roots,
+        )
     }
+    fn advance_checked(
+        &mut self,
+        t_target: f64,
+        reported: &mut Vec<(f64, f64)>,
+        check: &dyn Fn(f64, f64) -> ControlFlow<&'static str>,
+        roots: &mut RootSet<'_, S::State>,
+    ) -> Result<RootOutcome<&'static str>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |t, y| check(t, y.scalar()),
+            roots,
+        )
+    }
+
     fn t(&self) -> f64 {
         AdaptiveStepper::t(self)
     }
@@ -429,9 +481,29 @@ where
         t_target: f64,
         reported: &mut Vec<(f64, f64)>,
         roots: &mut RootSet<'_, S::State>,
-    ) -> Result<RootOutcome, IntegrationError> {
-        self.advance_to_roots(t_target, |t, y| reported.push((t, y.scalar())), roots)
+    ) -> Result<RootOutcome<Infallible>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |_, _| ControlFlow::Continue(()),
+            roots,
+        )
     }
+    fn advance_checked(
+        &mut self,
+        t_target: f64,
+        reported: &mut Vec<(f64, f64)>,
+        check: &dyn Fn(f64, f64) -> ControlFlow<&'static str>,
+        roots: &mut RootSet<'_, S::State>,
+    ) -> Result<RootOutcome<&'static str>, IntegrationError> {
+        self.advance_to_roots(
+            t_target,
+            |t, y| reported.push((t, y.scalar())),
+            |t, y| check(t, y.scalar()),
+            roots,
+        )
+    }
+
     fn t(&self) -> f64 {
         AdaptiveStepper853::t(self)
     }
@@ -812,6 +884,118 @@ fn case_a_root_in_the_first_step_reports_nothing<W: Walker<Sys = Ramp>>(
     }
 }
 
+/// The caller's termination check stops a root walk, on the step where it
+/// breaks.
+///
+/// A walk looking for boundaries still has to stop where the caller says, and
+/// the answer names that reason rather than a boundary. The callback has
+/// already run for that step, as it has in `advance_to`.
+fn case_the_check_stops_a_root_walk<W: Walker<Sys = Ramp>>(label: &str, mut walker: W) {
+    // Never reached: `y(3) = 4.5`, and the check breaks first.
+    let event = AtLevel::rising(10.0);
+    root_set!(roots, SEARCH, &event as &dyn RootEvent<State<1, 1>>);
+    let mut reported = Vec::new();
+
+    let outcome = walker
+        .advance_checked(
+            T_END,
+            &mut reported,
+            &|_, y| {
+                if y > 1.0 {
+                    ControlFlow::Break("above one")
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+            &mut roots,
+        )
+        .expect("the walk succeeds");
+    assert_eq!(
+        outcome,
+        RootOutcome::Event {
+            reason: "above one"
+        },
+        "{label}: the walk stops where the caller said"
+    );
+    assert!(
+        walker.y() > 1.0,
+        "{label}: the stepper is on the step that broke: y = {}",
+        walker.y()
+    );
+    assert_reported_walk(label, &reported, walker.t());
+}
+
+/// The check is asked about the state a root walk starts from.
+///
+/// A level-triggered condition can already hold there, and stepping first
+/// would report it one step late with a state the caller's own predicate
+/// rejects.
+fn case_the_check_is_asked_before_the_first_step<W: Walker<Sys = Ramp>>(
+    label: &str,
+    mut walker: W,
+) {
+    let event = AtLevel::rising(LEVEL);
+    root_set!(roots, SEARCH, &event as &dyn RootEvent<State<1, 1>>);
+    let mut reported = Vec::new();
+    let start = walker.t();
+
+    let outcome = walker
+        .advance_checked(
+            T_END,
+            &mut reported,
+            &|_, _| ControlFlow::Break("already"),
+            &mut roots,
+        )
+        .expect("the walk succeeds");
+    assert_eq!(
+        outcome,
+        RootOutcome::Event { reason: "already" },
+        "{label}: the state the walk starts from is checked"
+    );
+    assert_eq!(walker.t(), start, "{label}: no step was taken");
+    assert!(reported.is_empty(), "{label}: no state was reported");
+}
+
+/// A step that ended at a root does not consult the check.
+///
+/// The boundary state is the caller's to handle, the same reason the callback
+/// does not see it: a predicate asked there would be asked about a state whose
+/// mode has not been updated yet. The caller runs its own check once it has.
+fn case_a_root_does_not_consult_the_check<W: Walker<Sys = Ramp>>(label: &str, mut walker: W) {
+    // Crossed at `t = 0.2`, inside the first step.
+    let event = AtLevel::rising(0.02);
+    root_set!(roots, SEARCH, &event as &dyn RootEvent<State<1, 1>>);
+    let mut reported = Vec::new();
+    let asked = Cell::new(0);
+
+    let outcome = walker
+        .advance_checked(
+            T_END,
+            &mut reported,
+            &|_, y| {
+                asked.set(asked.get() + 1);
+                // Holds at the boundary and at every state past it, and not at
+                // the state the walk starts from.
+                if y > 0.0 {
+                    ControlFlow::Break("would stop")
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+            &mut roots,
+        )
+        .expect("the walk succeeds");
+    assert!(
+        matches!(outcome, RootOutcome::Roots { .. }),
+        "{label}: the boundary is what ended the walk: {outcome:?}"
+    );
+    assert_eq!(
+        asked.get(),
+        1,
+        "{label}: the check is asked about the start and not about the boundary"
+    );
+}
+
 /// A walk over an empty set steps as it always would and reports nothing found.
 fn case_no_events_walks_the_span<W: Walker<Sys = Ramp>>(label: &str, mut walker: W) {
     let events: [&dyn RootEvent<State<1, 1>>; 0] = [];
@@ -1152,6 +1336,21 @@ macro_rules! contract_for {
             }
 
             #[test]
+            fn the_check_stops_a_root_walk() {
+                case_the_check_stops_a_root_walk(stringify!($solver), $walker);
+            }
+
+            #[test]
+            fn the_check_is_asked_before_the_first_step() {
+                case_the_check_is_asked_before_the_first_step(stringify!($solver), $walker);
+            }
+
+            #[test]
+            fn a_root_does_not_consult_the_check() {
+                case_a_root_does_not_consult_the_check(stringify!($solver), $walker);
+            }
+
+            #[test]
             fn a_root_in_the_first_step_reports_nothing() {
                 case_a_root_in_the_first_step_reports_nothing(stringify!($solver), $walker);
             }
@@ -1403,7 +1602,12 @@ fn a_mode_that_switches_at_the_boundary_is_located_late() {
         );
 
         match stepper
-            .advance_to_roots(2.0, |_, _| {}, &mut roots)
+            .advance_to_roots(
+                2.0,
+                |_, _| {},
+                |_, _| ControlFlow::<Infallible>::Continue(()),
+                &mut roots,
+            )
             .expect("the walk succeeds")
         {
             RootOutcome::Roots { t, .. } => {
