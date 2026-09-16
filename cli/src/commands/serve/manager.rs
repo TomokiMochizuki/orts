@@ -223,7 +223,8 @@ fn validate_sim_config(config: &SimConfig) -> Result<(), String> {
     config.validate()?;
     // The serve loop does not drain a `[[command]]` timeline, so a config that
     // `orts serve --config` rejects must not slip in through a WebSocket
-    // `start_simulation` and have its uplinks dropped instead.
+    // `start_simulation` and have its uplinks dropped instead. The same gate
+    // refuses `frame = "gcrs"` (serve is `SimpleEci`-locked).
     config.ensure_serve_supported()?;
     // `[gravity_field]` names a file on the server's filesystem. A WebSocket
     // client must not be able to make the server open arbitrary paths (or
@@ -782,5 +783,24 @@ orbit = { type = "circular", altitude = 500 }
         .expect("valid test toml");
         let err = validate_sim_config(&config).unwrap_err();
         assert!(err.contains("not accepted over WebSocket"), "got: {err}");
+    }
+
+    /// A WebSocket `start_simulation` asking for `gcrs` is told, not served
+    /// the `SimpleEci` propagation the engine actually does.
+    #[test]
+    fn ws_start_rejects_the_gcrs_frame() {
+        let config: SimConfig = toml::from_str(
+            r#"
+frame = "gcrs"
+eop = "zero"
+
+[[satellites]]
+id = "a"
+orbit = { type = "circular", altitude = 500 }
+"#,
+        )
+        .expect("valid test toml");
+        let err = validate_sim_config(&config).unwrap_err();
+        assert!(err.contains("not supported by `orts serve`"), "got: {err}");
     }
 }

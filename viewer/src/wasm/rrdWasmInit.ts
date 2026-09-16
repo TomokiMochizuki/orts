@@ -12,6 +12,10 @@ export interface RrdMetadata {
   body_name: string | null;
   altitude: number | null;
   period: number | null;
+  /** The inertial frame of the states; `null` for a recording written before
+   * it was recorded (`simple-eci`). The wasm decoder refuses any other frame,
+   * so a decoded recording is always one the viewer can draw. */
+  frame?: string | null;
 }
 
 export interface RrdRow {

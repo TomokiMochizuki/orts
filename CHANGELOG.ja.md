@@ -88,6 +88,19 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   `stream_deliver` / `stream_take` / `stream_close`。([#58](https://github.com/sksat/orts/pull/58), [#84](https://github.com/sksat/orts/pull/84))
 - WIT v0 plugin interface に msg-io / stream-io チャネルを追加。([#58](https://github.com/sksat/orts/pull/58), [#84](https://github.com/sksat/orts/pull/84))
 
+#### Added
+- `setup::build_orbital_system_in_frame::<F>` — 慣性系を明示する
+  `build_orbital_system`。frame-aware なモデル (drag、球面調和場) がそれぞれ
+  provider を持てるよう EOP storage を factory で受ける。`HasPosition` を任意の
+  frame の `OrbitalState<F>` に実装し、`record::SimMetadata` に frame 名を追加。
+  ([#411](https://github.com/sksat/orts/issues/411))
+- **BREAKING**: `setup::build_orbital_system` / `build_orbital_system_in_frame` /
+  `build_spacecraft_dynamics` が、別々の `mu` と `gravity_field` 引数の代わりに
+  `setup::CentralGravity` (`Zonal { mu }` または `Harmonic(field)`) を受ける。
+  中心項の GM の出所が一つ (`CentralGravity::mu()`、`Harmonic` では場自身の GM) に
+  なるので場の GM と食い違えず、zonal / harmonic の排他は builder 内のチェックではなく
+  variant で表される。([#411](https://github.com/sksat/orts/issues/411))
+
 #### Changed
 - `IndependentGroup` と `CoupledGroup` が、どの solver も同じ 3 つの呼び出し
   (`stepper` / `from_checked_state` / `advance_to`) で進めるようになった (RK4 の枝だけが
@@ -406,6 +419,19 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `orts-cli` (Rust, crates.io, binary)
 
 #### Added
+- `frame` / `--frame {simple-eci|gcrs}` と `eop` / `--eop {auto|PATH|zero}`:
+  `orts run` の軌道のみの経路を `Gcrs` (IAU 2006/2000A CIO chain + 観測 IERS
+  EOP、極運動込み) で伝播できるようにした。従来の ERA のみの `SimpleEci` が既定。
+  `auto` は IERS から `finals2000A.all` を取得 (24h キャッシュ)、パス指定はローカル
+  ファイル、`zero` は model CIP のみ。`gcrs` は Earth 専用・EOP 必須で、姿勢付き
+  fleet・コントローラ・`orts serve` (いずれも `SimpleEci` 固定) では黙って fallback
+  せず reject する。`auto` またはファイル指定では、伝播区間が EOP table の範囲を
+  外れる run を伝播前に reject し、table と run の MJD 範囲を示す (範囲外では
+  transform が末尾の行を保持して黙って精度を落とすが、それは `zero` だけが明示的に
+  選ぶもの)。recording の metadata に frame を残し (`# frame = gcrs`)、`orts replay`
+  は `simple-eci` 以外の frame で伝播した recording を reject する (viewer は描く
+  すべての state に ERA のみの地球回転を掛けるので、黙って誤った ground track を
+  出すことになる)。([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) と `run` / `serve` の
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]`: ICGEM `.gfc`
   の完全球面調和重力場を J2/J3/J4 の zonal model の代わりに登録し、ファイルの GM を
@@ -769,6 +795,13 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `arika` (Rust, crates.io)
 
 #### Added
+- `fetch-eop` feature: `EopTable::fetch` / `fetch_default` が IERS の
+  `finals2000A.all` を取得し `~/.cache/orts/finals2000A.all` に 24h キャッシュする
+  (`CssiSpaceWeather::fetch` と同じ作り)。`ClampedEop::new` が `Borrow<EopTable>`
+  を受けるので、1 つの table を複数の力学モデルで共有できる。
+  ([#411](https://github.com/sksat/orts/issues/411))
+
+#### Added
 - `arika_wasm::orbit_derived_batch` が、状態ベクトルの配列から Kepler 要素と
   軌道のスカラー量を返すようになった。ブラウザが `.rrd` を読むときも、CLI が CSV に
   書くのと同じ `KeplerianElements::from_state_vector` で計算される。軌道面を持たない
@@ -850,6 +883,14 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   落としていた mantissa の半分を回復した。非退化な軌道の値は変わらない。([#359](https://github.com/sksat/orts/pull/359))
 
 #### Fixed
+- `Finals2000A::parse` (したがって `EopTable::from_finals2000a` / `fetch`) が配布
+  されている `finals2000A.all` を読めるようにした。ファイル末尾には日付だけあって
+  EOP 列がすべて空の行が約 50 行 (全幅に空白詰め) 並んでおり、parser はその最初の
+  行を `xp_A` の不正な数値として全体を失敗させていた。そのため `--eop auto` は
+  download 成功直後に失敗し、切り詰めた test fixture では見えなかった。Bulletin A
+  の必須値がすべて空の行は系列の終端として skip し、一部だけ空の行は従来どおり
+  エラー。実ファイルの末尾から切り出した fixture で固定。
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `tle::parse` が、1 衛星ぶんより多くの行を含む入力を拒否するようになった
   (新しい `TleParseError::TrailingLines`)。従来は先頭のレコードを読んで残りを黙って捨てて
   いた。checksum は行ごとの mod-10 なので読んだ 2 行だけで成立し、catalog number の一致検査も
@@ -1139,6 +1180,11 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
 ### `viewer`
 
 #### Added
+- recording が伝播された frame を読み (CSV の `# frame`、`.rrd` の `meta/sim/frame`)、
+  `simple-eci` 以外の frame の recording は描かずにメッセージ付きで reject する。
+  viewer はすべての state に SimpleEci (ERA のみ) の地球回転を掛けるので、`gcrs` の
+  recording は地球固定位置と ground track が黙って誤る。frame の無い recording は
+  このフィールドより前のもので `simple-eci`。([#411](https://github.com/sksat/orts/issues/411))
 - 外乱トルクを model ごとに 1 チャートで表示し、body frame の 3 成分を重ねる。
   外乱トルクで誤るのは向きで、magnitude では反対向きに回している場合と区別が付かない。
   そのため norm ではなく x, y, z を別系列として描く。チャートは実行が持つ model

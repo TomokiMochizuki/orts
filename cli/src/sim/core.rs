@@ -301,13 +301,12 @@ pub fn spacecraft_dynamics_for(
 ) -> Result<SpacecraftDynamics<Box<dyn GravityField>>, String> {
     build_spacecraft_dynamics(
         &params.body,
-        params.mu,
+        params.central_gravity(),
         params.epoch,
         &sat_params(spec),
         third_bodies,
         att.inertia_matrix(),
         params.build_atmosphere_model(),
-        params.gravity_field(),
     )
     .map_err(|e| format!("solar force models: {e}"))
 }

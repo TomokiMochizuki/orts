@@ -953,7 +953,7 @@ mod tests {
         let inertia = nalgebra::Matrix3::identity() * 10.0;
         let dynamics = orts::setup::build_spacecraft_dynamics(
             &body,
-            mu,
+            orts::setup::CentralGravity::Zonal { mu: mu },
             None,
             &orts::setup::SatelliteParams {
                 has_drag: false,
@@ -967,8 +967,6 @@ mod tests {
             },
             &[],
             inertia,
-            None,
-            // No spherical-harmonic field: this fixture is the zonal path.
             None,
         )
         .expect("Earth has a Sun ephemeris");

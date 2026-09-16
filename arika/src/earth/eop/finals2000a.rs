@@ -34,6 +34,11 @@ use super::error::EopParseError;
 /// Parser for IERS `finals2000A.all` / `finals2000A.data` / `finals2000A.daily`.
 pub struct Finals2000A;
 
+/// The Bulletin A columns a row must carry to be an entry (0-indexed byte
+/// ranges): x pole, y pole, UT1-UTC. A row with all three blank is the file's
+/// padded tail; a row with only some blank is malformed.
+const REQUIRED_A_COLUMNS: [(usize, usize); 3] = [(17, 27), (36, 46), (58, 68)];
+
 impl Finals2000A {
     /// Parse a finals2000A text file into a vector of EOP entries.
     ///
@@ -41,8 +46,12 @@ impl Finals2000A {
     /// values are used (matching Orekit's behavior).
     ///
     /// Lines shorter than 68 characters are silently skipped (header lines,
-    /// blank lines). Only lines with a valid MJD and at least Bulletin A
-    /// pole + UT1-UTC values are included.
+    /// blank lines), and so are rows that carry a date and MJD but no
+    /// Bulletin A values at all: the published `finals2000A.all` ends with
+    /// about fifty such rows, padded to full width, for the dates past the
+    /// last prediction. A row with *some* of the required values is still an
+    /// error — that is a malformed row, not the end of the series. Only rows
+    /// with a valid MJD and Bulletin A pole + UT1-UTC values are included.
     pub fn parse(text: &str) -> Result<Vec<EopEntry>, EopParseError> {
         let mut entries = Vec::new();
         let mut prev_mjd: Option<f64> = None;
@@ -73,6 +82,15 @@ impl Finals2000A {
                 });
             }
 
+            // The blank tail of the published file: dated rows with every
+            // Bulletin A column empty. Not data, so not an error either.
+            if REQUIRED_A_COLUMNS
+                .iter()
+                .all(|&(start, end)| line[start..end].trim().is_empty())
+            {
+                continue;
+            }
+
             // Check monotonicity
             if let Some(prev) = prev_mjd.filter(|&p| mjd <= p) {
                 return Err(EopParseError::NonMonotonicMjd {
@@ -82,12 +100,12 @@ impl Finals2000A {
                 });
             }
 
-            // Parse Bulletin A pole (required)
-            let xp_a = parse_col(line, 17, 27, "xp_A", line_num)?;
-            let yp_a = parse_col(line, 36, 46, "yp_A", line_num)?;
-
-            // Parse Bulletin A UT1-UTC (required) — cols 59-68 (1-indexed)
-            let dut1_a = parse_col(line, 58, 68, "dut1_A", line_num)?;
+            // Parse Bulletin A pole and UT1-UTC (required; see
+            // `REQUIRED_A_COLUMNS`)
+            let [(xp_s, xp_e), (yp_s, yp_e), (dut1_s, dut1_e)] = REQUIRED_A_COLUMNS;
+            let xp_a = parse_col(line, xp_s, xp_e, "xp_A", line_num)?;
+            let yp_a = parse_col(line, yp_s, yp_e, "yp_A", line_num)?;
+            let dut1_a = parse_col(line, dut1_s, dut1_e, "dut1_A", line_num)?;
 
             // Parse Bulletin A LOD [ms] (optional)
             let lod_a = parse_col_opt(line, 78, 86, "lod_A", line_num)?;

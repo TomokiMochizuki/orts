@@ -45,6 +45,26 @@ pub fn run_replay(input: &str, port: u16) {
     rt.block_on(async_server(data, port));
 }
 
+/// The viewer applies the `SimpleEci` (ERA-only) Earth rotation to every
+/// state it draws, and `WsMessage::Info` carries no frame, so a recording
+/// propagated in another frame would get wrong Earth-fixed positions and
+/// ground tracks without a word. Refuse it here instead. A recording written
+/// before the frame was recorded has no `frame` and is `SimpleEci` by
+/// construction.
+// TODO: carry the frame in `WsMessage::Info` and let the viewer pick the
+// Earth-fixed transform, then lift this.
+pub(crate) fn ensure_viewer_frame(frame: Option<&str>) -> Result<(), String> {
+    match frame {
+        None | Some("simple-eci") => Ok(()),
+        Some(other) => Err(format!(
+            "this recording was propagated in frame `{other}`, but the viewer applies the \
+             SimpleEci (ERA-only) Earth rotation, so its ground tracks would be wrong. \
+             Replaying `{other}` recordings is not supported yet; run with \
+             `--frame simple-eci` for a recording the viewer can show"
+        )),
+    }
+}
+
 fn load_replay_data(path: &str) -> ReplayData {
     let rrd = load_rrd_data(path).unwrap_or_else(|e| {
         eprintln!("Error reading {path}: {e}");
@@ -52,6 +72,10 @@ fn load_replay_data(path: &str) -> ReplayData {
     });
 
     let meta = &rrd.metadata;
+    if let Err(e) = ensure_viewer_frame(meta.frame.as_deref()) {
+        eprintln!("Error: {path}: {e}");
+        std::process::exit(1);
+    }
     let mu = meta.mu.unwrap_or(398600.4418);
     let body_radius = meta.body_radius.unwrap_or(6378.137);
     let central_body = meta.body_name.as_deref().unwrap_or("earth").to_lowercase();
@@ -380,6 +404,16 @@ fn handle_query_range(
 
 #[cfg(test)]
 mod tests {
+    /// Only what the viewer can draw correctly gets past `orts replay`.
+    #[test]
+    fn replay_refuses_recordings_propagated_outside_simple_eci() {
+        assert!(super::ensure_viewer_frame(None).is_ok());
+        assert!(super::ensure_viewer_frame(Some("simple-eci")).is_ok());
+        let err = super::ensure_viewer_frame(Some("gcrs")).unwrap_err();
+        assert!(err.contains("frame `gcrs`"), "{err}");
+        assert!(err.contains("not supported yet"), "{err}");
+    }
+
     use super::*;
 
     fn make_test_state(entity_path: &str, t: f64) -> HistoryState {

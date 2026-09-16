@@ -22,6 +22,30 @@ describe("parseCSVChunked", () => {
     }
   });
 
+  it("passes a simple-eci or frameless recording and refuses any other frame", () => {
+    const rows = "0,7000,0,0,0,7.5,0\n10,7000,100,50,-0.1,7.5,0.01";
+    for (const header of ["", "# frame = simple-eci\n"]) {
+      const messages: CSVWorkerMessage[] = [];
+      parseCSVChunked(`${header}# mu = 398600.4418 km^3/s^2\n${rows}`, 5000, (msg) =>
+        messages.push(msg),
+      );
+      expect(messages.some((m) => m.type === "error")).toBe(false);
+      expect(messages.find((m) => m.type === "complete")).toMatchObject({ totalPoints: 2 });
+    }
+
+    const messages: CSVWorkerMessage[] = [];
+    parseCSVChunked(`# frame = gcrs\n# mu = 398600.4418 km^3/s^2\n${rows}`, 5000, (msg) =>
+      messages.push(msg),
+    );
+    // Refused before any metadata or point goes out.
+    expect(messages).toHaveLength(1);
+    expect(messages[0].type).toBe("error");
+    if (messages[0].type === "error") {
+      expect(messages[0].message).toContain("frame `gcrs`");
+      expect(messages[0].message).toContain("not supported yet");
+    }
+  });
+
   it("emits chunks of points", () => {
     const lines = ["# comment"];
     for (let i = 0; i < 100; i++) {

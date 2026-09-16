@@ -23,7 +23,17 @@ pub struct RrdMetadata {
     pub body_name: Option<String>,
     pub altitude: Option<f64>,
     pub period: Option<f64>,
+    /// The inertial frame the states are in (`meta/sim/frame`). `None` for a
+    /// recording written before it was recorded, which is `simple-eci`.
+    pub frame: Option<String>,
 }
+
+/// The one frame the viewer can draw: it applies the ERA-only Earth rotation
+/// to every state, so a recording in any other frame would get wrong
+/// Earth-fixed positions and ground tracks without a word. `decode_rrd`
+/// refuses those instead of handing them on.
+// TODO: decode the frame into the viewer and let it pick the transform.
+pub const VIEWER_FRAME: &str = "simple-eci";
 
 /// A single row of orbital state data.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -398,7 +408,19 @@ pub fn decode_rrd(reader: impl Read) -> Result<ParsedRrd, Box<dyn std::error::Er
         altitude: meta_scalars.get("meta/sim/altitude").copied(),
         period: meta_scalars.get("meta/sim/period").copied(),
         body_name: meta_texts.get("meta/sim/body_name").cloned(),
+        frame: meta_texts.get("meta/sim/frame").cloned(),
     };
+    if let Some(frame) = metadata.frame.as_deref()
+        && frame != VIEWER_FRAME
+    {
+        return Err(format!(
+            "this recording was propagated in frame `{frame}`, but the viewer applies the \
+             SimpleEci (ERA-only) Earth rotation, so its ground tracks would be wrong. \
+             Opening `{frame}` recordings is not supported yet; run with `--frame simple-eci` \
+             for a recording the viewer can show"
+        )
+        .into());
+    }
 
     // Find base entity paths with x/y/z/vx/vy/vz sub-entities
     let base_paths: std::collections::BTreeSet<String> = scalars
@@ -631,6 +653,38 @@ mod tests {
             data.rows.len(),
             data.metadata.epoch_jd
         );
+    }
+
+    /// The frame is read back from `meta/sim/frame`, and only the one the
+    /// viewer draws correctly gets through; a recording that never recorded
+    /// a frame predates the field and is `simple-eci`.
+    #[test]
+    fn a_recording_outside_simple_eci_is_refused() {
+        let frame_doc = |frame: &str| re_sdk_types::archetypes::TextDocument::new(frame);
+        let ok = decode_written(|rec| {
+            rec.log("meta/sim/frame", &frame_doc("simple-eci"))
+                .expect("log frame");
+        });
+        assert_eq!(ok.metadata.frame.as_deref(), Some("simple-eci"));
+        assert!(
+            load_fixture().metadata.frame.is_none(),
+            "fixture predates the field"
+        );
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gcrs.rrd");
+        let rec = re_sdk::RecordingStreamBuilder::new("rrd-wasm-test")
+            .save(&path)
+            .expect("recording stream");
+        rec.log("meta/sim/frame", &frame_doc("gcrs"))
+            .expect("log frame");
+        rec.flush_blocking().expect("flush");
+        drop(rec);
+        let bytes = std::fs::read(&path).expect("written rrd");
+        let err = decode_rrd(std::io::Cursor::new(&bytes))
+            .err()
+            .expect("a gcrs recording must be refused");
+        assert!(err.to_string().contains("frame `gcrs`"), "{err}");
     }
 
     #[test]

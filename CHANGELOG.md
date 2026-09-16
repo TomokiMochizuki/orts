@@ -112,6 +112,22 @@ section is subdivided by package.
   / `stream_take` / `stream_close` for raw byte streams. ([#58](https://github.com/sksat/orts/pull/58), [#84](https://github.com/sksat/orts/pull/84))
 - WIT v0 plugin interface extended with the msg-io and stream-io channels. ([#58](https://github.com/sksat/orts/pull/58), [#84](https://github.com/sksat/orts/pull/84))
 
+#### Added
+- `setup::build_orbital_system_in_frame::<F>` — `build_orbital_system` in an
+  explicit inertial frame, taking an EOP-storage factory so the frame-aware
+  models (drag, the spherical-harmonic field) can each own a provider over one
+  shared table. `HasPosition` is implemented for `OrbitalState<F>` in any
+  frame, and `record::SimMetadata` carries the frame name.
+  ([#411](https://github.com/sksat/orts/issues/411))
+- **BREAKING**: `setup::build_orbital_system`, `build_orbital_system_in_frame`
+  and `build_spacecraft_dynamics` take a `setup::CentralGravity` —
+  `Zonal { mu }` or `Harmonic(field)` — in place of the separate `mu` and
+  `gravity_field` arguments. The point-mass GM has one source
+  (`CentralGravity::mu()`, the field's own GM for `Harmonic`), so it can no
+  longer disagree with the field's, and the zonal / harmonic exclusivity is a
+  variant rather than a check inside the builder.
+  ([#411](https://github.com/sksat/orts/issues/411))
+
 #### Changed
 - `IndependentGroup` and `CoupledGroup` advance every solver through the same
   three calls (`stepper`, `from_checked_state`, `advance_to`), where the RK4
@@ -508,6 +524,22 @@ section is subdivided by package.
 ### `orts-cli` (Rust, crates.io, binary)
 
 #### Added
+- `frame` / `--frame {simple-eci|gcrs}` and `eop` / `--eop {auto|PATH|zero}`:
+  propagate `orts run`'s orbit-only path in `Gcrs` — the IAU 2006/2000A CIO
+  chain with observed IERS EOP (polar motion included) — instead of the
+  ERA-only `SimpleEci`. `auto` downloads `finals2000A.all` from IERS with a
+  24 h cache, a path loads a local series, `zero` asks for the model CIP only.
+  `gcrs` is Earth-only, requires an EOP source, and is refused for attitude
+  fleets, controllers and `orts serve` (all `SimpleEci`-locked) rather than
+  silently falling back. With `auto` or a file, a run whose span leaves the
+  EOP table is refused before propagation, naming the table's and the run's
+  MJD ranges: past the table the transform would hold the last row and lose
+  accuracy without saying so, which only `zero` opts into explicitly. The
+  recording metadata names the frame (`# frame = gcrs`), and `orts replay`
+  refuses a recording propagated in any frame but `simple-eci`: the viewer
+  applies the ERA-only Earth rotation to everything it draws, so it would
+  show wrong ground tracks without a word.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `[gravity_field]` config table (`path`, `degree`, `order`) and
   `--gravity-field <PATH> [--gravity-degree N] [--gravity-order M]` on `run` /
   `serve`: install a full spherical-harmonic geopotential from an ICGEM `.gfc`
@@ -920,6 +952,13 @@ section is subdivided by package.
 ### `arika` (Rust, crates.io)
 
 #### Added
+- `fetch-eop` feature: `EopTable::fetch` / `fetch_default` download the IERS
+  `finals2000A.all` series and cache it at `~/.cache/orts/finals2000A.all`
+  (24 h), mirroring `CssiSpaceWeather::fetch`. `ClampedEop::new` wraps any
+  `Borrow<EopTable>`, so one shared table can back several force models.
+  ([#411](https://github.com/sksat/orts/issues/411))
+
+#### Added
 - `arika_wasm::orbit_derived_batch` returns Keplerian elements and the scalar
   orbit quantities for a batch of state vectors, so a browser reading a `.rrd`
   computes them with the same `KeplerianElements::from_state_vector` the CLI
@@ -1011,6 +1050,15 @@ section is subdivided by package.
   Non-degenerate orbits are unchanged. ([#359](https://github.com/sksat/orts/pull/359))
 
 #### Fixed
+- `Finals2000A::parse` (and so `EopTable::from_finals2000a` / `fetch`) reads
+  the published `finals2000A.all`. The file ends with about fifty dated rows,
+  padded to full width, whose EOP columns are all blank; the parser read the
+  first of them as a malformed `xp_A` and failed the whole file, so `--eop
+  auto` failed right after a successful download while the trimmed test
+  fixture passed. Rows with every Bulletin A value blank are now skipped as
+  the end of the series; a row with only some of them blank is still an
+  error. Pinned by a fixture cut from the real tail.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - `tle::parse` refuses input carrying more than the one element set it returns,
   as the new `TleParseError::TrailingLines`. It read the first record and
   dropped the rest without saying so, and no check looked past the second line:
@@ -1366,6 +1414,13 @@ section is subdivided by package.
 ### `viewer`
 
 #### Added
+- The frame a recording was propagated in is read (`# frame` in CSV,
+  `meta/sim/frame` in `.rrd`), and a recording in any frame but `simple-eci`
+  is refused with a message instead of being drawn: the viewer applies the
+  SimpleEci (ERA-only) Earth rotation to every state, so a `gcrs` recording
+  would get wrong Earth-fixed positions and ground tracks silently. A
+  recording without a frame predates the field and is `simple-eci`.
+  ([#411](https://github.com/sksat/orts/issues/411))
 - A torque chart per disturbance model, with the three body-frame components
   overlaid. What a disturbance torque gets wrong is its direction — a spacecraft
   turned the wrong way reads the same as one turned the right way in a
