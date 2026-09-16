@@ -928,6 +928,10 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   越えたモードを更新するまで最終ではないので、呼び出し側が stepper から読み、処理を終えてから
   記録する。
 
+  終了判定 `event_check` は `advance_to` と同じもので、聞く場所も同じ (歩き始めの state と、確定した
+  通常ステップ)。walk は state が決める境界と呼び出し側が決める条件の両方で止まれる。境界はそのどちらの
+  場所でもない。
+
   set は event の slice と、呼び出し側が所有する `RootSlot` の slice を借りる。そのため event の
   個数は呼び出し側の設定で決まる数でよく、crate は引き続き allocation を行わない。各 event は
   `deactivate` / `activate` で切り替えられる。一方向拘束の「解除」は、拘束していない間は意味を
@@ -938,7 +942,7 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   値について 1 回まで。もう 1 つは、探索の間は離散モードを凍結すること。モードの切り替わりを
   跨いで RK4 を再ステップすると、境界までの残り $r$ に対して二分探索は $6r/5$ の刻みを返し、
   到達時刻を $0.2r$ 遅く報告する (刻み 8 通りで実測し、テストで固定した)。
-  ([#508](https://github.com/sksat/orts/pull/508), [#509](https://github.com/sksat/orts/pull/509))
+  ([#508](https://github.com/sksat/orts/pull/508), [#509](https://github.com/sksat/orts/pull/509), [#510](https://github.com/sksat/orts/pull/510))
 - `Integrator::stepper` を追加。状態とその時刻を保持し、目標時刻を次々に与えて進める
   `FixedStepper` を返す。`stepper` / `from_checked_state` / `advance_to` という 3 つの呼び出しは
   adaptive solver が既に持っていたもので、どこで止まるかを進みながら決める伝播ループは、
