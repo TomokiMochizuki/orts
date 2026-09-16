@@ -296,20 +296,19 @@ async fn async_server(
         textures::spawn_texture_downloader(Arc::clone(&texture_cache), tx.clone());
     let bridge = Arc::new(StreamBridge::new());
 
-    // A configured gravity field is loaded here, on the main task, and handed
-    // to the manager: a missing or malformed file is a fatal configuration
+    // The initial simulation (`--config`, or orbit arguments on the legacy
+    // path) gets its `SimParams` built here, on the main task, so a bad
+    // `[gravity_field]` / `--gravity-field` file is a fatal configuration
     // error. Inside the spawned manager it would only kill that task and
     // leave the HTTP / WebSocket server up with nobody behind the command
     // channel.
-    let initial_gravity_field = match &initial_config {
-        Some(cfg) => SimParams::load_config_gravity_field(cfg).map_err(CmdError::failure)?,
-        None => None,
-    };
-
-    // Spawn simulation manager
     let mgr_tx = tx.clone();
     let plugin_overrides = manager::PluginBackendOverrides::from_sim_args(sim);
-    if has_explicit_sim_args(sim) && initial_config.is_none() {
+    let initial_params = if let Some(cfg) = &initial_config {
+        let mut params = SimParams::from_config(cfg).map_err(CmdError::failure)?;
+        plugin_overrides.apply(&mut params);
+        Some(params)
+    } else if has_explicit_sim_args(sim) {
         // Legacy path: build SimParams from CLI args directly.
         // from_sim_args already populates plugin_backend_choice /
         // threshold, but we still pass the overrides so that any
@@ -317,34 +316,33 @@ async fn async_server(
         // restart) honors them too.
         // Same reason as in `run`: this path skips `SimConfig::validate`.
         crate::commands::run::validate_sim_args(sim)?;
-        let field = SimParams::load_gravity_field(
-            sim.gravity_field.as_deref(),
-            sim.gravity_degree,
-            sim.gravity_order,
-        )
-        .map_err(CmdError::failure)?;
-        let params = Arc::new(SimParams::from_sim_args_with_gravity_field(
-            sim, true, field,
-        ));
-        crate::satellite::ensure_unique_ids(&params.satellites)?;
-        tokio::spawn(manager::simulation_manager_with_params(
-            params,
-            plugin_overrides,
-            cmd_rx,
-            mgr_tx,
-            texture_request_tx.clone(),
-            Arc::clone(&bridge),
-        ));
+        Some(SimParams::from_sim_args(sim, true).map_err(CmdError::failure)?)
     } else {
-        tokio::spawn(manager::simulation_manager(
-            initial_config,
-            initial_gravity_field,
-            plugin_overrides,
-            cmd_rx,
-            mgr_tx,
-            texture_request_tx.clone(),
-            Arc::clone(&bridge),
-        ));
+        None
+    };
+    match initial_params {
+        Some(params) => {
+            let params = Arc::new(params);
+            crate::satellite::ensure_unique_ids(&params.satellites)?;
+            tokio::spawn(manager::simulation_manager_with_params(
+                params,
+                plugin_overrides,
+                cmd_rx,
+                mgr_tx,
+                texture_request_tx.clone(),
+                Arc::clone(&bridge),
+            ));
+        }
+        None => {
+            tokio::spawn(manager::simulation_manager(
+                None,
+                plugin_overrides,
+                cmd_rx,
+                mgr_tx,
+                texture_request_tx.clone(),
+                Arc::clone(&bridge),
+            ));
+        }
     }
 
     // The stdio plug task drives stdin/stdout with the kble-socket protocol

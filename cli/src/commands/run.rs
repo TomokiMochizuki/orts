@@ -102,35 +102,24 @@ pub fn run_simulation_cmd(
     format: OutputFormat,
     json: bool,
 ) -> Result<(), CmdError> {
-    // The gravity field is loaded here, once, and handed to the constructor:
-    // a missing or malformed file is a normal error, not a panic inside
-    // `SimParams`, and the file is not opened a second time.
     let mut params = if let Some(config_path) = &sim.config {
         reject_gravity_flags_with_config(sim, config_path)?;
         let config =
             crate::config::load_config_reporting_unread_keys(std::path::Path::new(config_path))?;
-        let field = SimParams::load_config_gravity_field(&config).map_err(CmdError::failure)?;
-        SimParams::from_config_with_gravity_field(&config, field)
+        SimParams::from_config(&config).map_err(CmdError::failure)?
     } else if sim.has_orbit_args() {
         // The direct-CLI path bypasses `SimConfig::validate`, so apply the
         // same time/tolerance checks here rather than letting a bad `--dt`
         // hang the propagation loop or panic inside step-size control.
         validate_sim_args(sim)?;
-        let field = SimParams::load_gravity_field(
-            sim.gravity_field.as_deref(),
-            sim.gravity_degree,
-            sim.gravity_order,
-        )
-        .map_err(CmdError::failure)?;
-        SimParams::from_sim_args_with_gravity_field(sim, false, field)
+        SimParams::from_sim_args(sim, false).map_err(CmdError::failure)?
     } else {
         // Auto-detect orts.toml in the current directory
         let config_path = std::path::Path::new("orts.toml");
         if config_path.exists() {
             reject_gravity_flags_with_config(sim, "orts.toml")?;
             let config = crate::config::load_config_reporting_unread_keys(config_path)?;
-            let field = SimParams::load_config_gravity_field(&config).map_err(CmdError::failure)?;
-            SimParams::from_config_with_gravity_field(&config, field)
+            SimParams::from_config(&config).map_err(CmdError::failure)?
         } else {
             return Err(CmdError::usage(
                 "no simulation configuration found.\n\

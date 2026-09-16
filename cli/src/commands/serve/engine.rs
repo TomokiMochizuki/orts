@@ -1478,7 +1478,7 @@ mod tests {
     /// no broadcast channel, and no stream bridge.
     fn engine_from_toml(toml: &str) -> Result<EngineInit, String> {
         let config: crate::config::SimConfig = toml::from_str(toml).expect("valid test toml");
-        let params = Arc::new(SimParams::from_config(&config));
+        let params = Arc::new(SimParams::from_config(&config).expect("valid test config"));
         let data_dir = std::env::temp_dir().join(format!(
             "orts-engine-test-{}-{:?}",
             std::process::id(),
@@ -1908,7 +1908,7 @@ attitude = { inertia_diag = [10, 20, 30], mass = 50 }
 "#;
         for toml in [ORBIT_ONLY, ATTITUDE] {
             let config: crate::config::SimConfig = toml::from_str(toml).expect("valid test toml");
-            let params = SimParams::from_config(&config);
+            let params = SimParams::from_config(&config).expect("valid test config");
             let mode = select_sim_mode(&params.satellites).expect("valid fleet");
             let init = engine_from_toml(toml).expect("engine builds");
             let group_mode = match init.engine.group {
