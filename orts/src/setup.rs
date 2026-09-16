@@ -247,8 +247,12 @@ pub fn build_orbital_system(
 /// points is how the two came to disagree about which models a config gets.
 /// Actuators (RW, MTQ, thrusters) stay with the caller, since which ones a
 /// spacecraft carries comes from its own hardware description.
-// Eight independent knobs of one builder; bundling them into a struct would
-// only move the same eight names one level down.
+// Eight independent knobs of one builder. A `Default`-backed argument struct
+// would let callers name only what they set and make the next model a new
+// field instead of a positional argument at every call site (adding
+// `gravity_field` touched each one: run, serve, sim/core and their tests).
+// TODO: introduce that struct when the next model lands, rather than adding a
+// ninth positional argument.
 #[allow(clippy::too_many_arguments)]
 pub fn build_spacecraft_dynamics(
     body: &KnownBody,
