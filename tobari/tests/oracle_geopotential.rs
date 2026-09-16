@@ -42,11 +42,42 @@ struct Point {
     potential_km2_s2: f64,
 }
 
+const FIXTURE_GFC: &str = include_str!("fixtures/orekit_geopotential_70x70.gfc");
+
 fn load_coefficients() -> SphericalHarmonicCoefficients {
-    SphericalHarmonicCoefficients::from_icgem(include_str!(
-        "fixtures/orekit_geopotential_70x70.gfc"
-    ))
-    .expect("fixture gfc must parse")
+    SphericalHarmonicCoefficients::from_icgem(FIXTURE_GFC, None).expect("fixture gfc must parse")
+}
+
+/// The streaming file reader with a degree cap yields the same coefficients
+/// as the whole-text parse, sized for the cap, and refuses a cap the file
+/// cannot honour.
+#[test]
+fn file_reader_with_a_degree_cap_matches_the_whole_text_parse() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/orekit_geopotential_70x70.gfc");
+    let whole = load_coefficients();
+    let capped = SphericalHarmonicCoefficients::from_icgem_file(&path, Some(20))
+        .expect("fixture gfc must parse through the reader");
+    assert_eq!(capped.max_degree(), 20);
+    assert_eq!((capped.gm(), capped.radius()), (whole.gm(), whole.radius()));
+    assert_eq!(capped.tide_system(), whole.tide_system());
+    for n in 0..=20 {
+        for m in 0..=n {
+            assert_eq!(
+                capped.coefficient(n, m),
+                whole.coefficient(n, m),
+                "({n}, {m})"
+            );
+        }
+    }
+    assert_eq!(capped.coefficient(21, 0), None);
+    match SphericalHarmonicCoefficients::from_icgem_file(&path, Some(71)) {
+        Err(tobari::IcgemFileError::Parse(tobari::IcgemParseError::DegreeUnavailable {
+            requested: 71,
+            available: 70,
+        })) => {}
+        other => panic!("expected DegreeUnavailable, got {other:?}"),
+    }
 }
 
 fn load_reference() -> Reference {

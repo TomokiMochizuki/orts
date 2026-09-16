@@ -1241,8 +1241,14 @@ section is subdivided by package.
   normalized `gfc` records; `gfct`/`trnd`/`dot`/`asin`/`acos` time-variable
   records and `unnormalized` files are rejected with an explicit error;
   `errors` column count, `m ≤ n`, duplicates, non-finite values, `C00 = 1`,
-  zero degree-1 and completeness are validated; `norm` is required and
-  `max_degree` is capped at `gravity::MAX_DEGREE` = 2190) with `gm()`,
+  zero degree-1 and completeness are validated; `norm` is required, a header
+  key declared twice is an error, and `max_degree` is capped at
+  `gravity::MAX_DEGREE` = 2190). `from_icgem(text, max_degree)`,
+  `from_icgem_reader(BufRead, max_degree)` and `from_icgem_file(path,
+  max_degree)` take an optional degree cap and stop reading once that
+  triangle is complete, so a 70×70 request on the degree-2190 EGM2008 file
+  allocates the 70×70 set only; asking for more than the file has is
+  `IcgemParseError::DegreeUnavailable`. Accessors `gm()`,
   `radius()`, `tide_system()` (recorded, not converted), `coefficient(n, m)`;
   and `gravity::SphericalHarmonicField`, a Holmes–Featherstone
   evaluator of the non-central potential and acceleration in the body frame

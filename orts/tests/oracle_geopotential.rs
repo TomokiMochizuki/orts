@@ -80,9 +80,10 @@ fn load_fixtures() -> FixtureFile {
 }
 
 fn load_coefficients() -> SphericalHarmonicCoefficients {
-    SphericalHarmonicCoefficients::from_icgem(include_str!(
-        "../../tobari/tests/fixtures/orekit_geopotential_70x70.gfc"
-    ))
+    SphericalHarmonicCoefficients::from_icgem(
+        include_str!("../../tobari/tests/fixtures/orekit_geopotential_70x70.gfc"),
+        None,
+    )
     .expect("fixture gfc must parse")
 }
 

@@ -65,9 +65,12 @@ pub mod space_weather;
 #[cfg(feature = "std")]
 pub use cssi::{CssiData, CssiSpaceWeather, OutOfRangeBehavior};
 pub use exponential::Exponential;
+#[cfg(feature = "std")]
+pub use gravity::IcgemFileError;
 #[cfg(feature = "alloc")]
 pub use gravity::{
-    IcgemError, SphericalHarmonicCoefficients, SphericalHarmonicField, TideSystem, TruncationError,
+    CoefficientError, IcgemParseError, SphericalHarmonicCoefficients, SphericalHarmonicField,
+    TideSystem, TruncationError,
 };
 pub use harris_priester::HarrisPriester;
 pub use nrlmsise00::Nrlmsise00;

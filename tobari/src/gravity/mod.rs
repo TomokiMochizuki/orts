@@ -78,7 +78,7 @@ use nalgebra::Vector3;
 
 use legendre::{HfRecursion, SCALE_UP, tri_index, tri_len};
 
-pub use icgem::{IcgemError, TideSystem};
+pub use icgem::{IcgemParseError, TideSystem};
 
 /// Highest degree a coefficient set may declare.
 ///
@@ -122,14 +122,16 @@ impl fmt::Display for CoefficientError {
 
 impl core::error::Error for CoefficientError {}
 
-/// Error from [`SphericalHarmonicCoefficients::from_icgem_file`].
+/// Error from [`SphericalHarmonicCoefficients::from_icgem_file`] /
+/// [`from_icgem_reader`](SphericalHarmonicCoefficients::from_icgem_reader):
+/// the text-level [`IcgemParseError`] plus I/O.
 #[cfg(feature = "std")]
 #[derive(Debug)]
 pub enum IcgemFileError {
     /// The file could not be read.
     Io(std::io::Error),
     /// The file was read but is not a usable static ICGEM gravity field.
-    Parse(IcgemError),
+    Parse(IcgemParseError),
 }
 
 #[cfg(feature = "std")]
@@ -219,11 +221,58 @@ impl fmt::Debug for SphericalHarmonicCoefficients {
 }
 
 impl SphericalHarmonicCoefficients {
-    /// Parse a static ICGEM `.gfc` text (see [`icgem`](self) rules and
-    /// [`IcgemError`] for what is rejected).
-    pub fn from_icgem(text: &str) -> Result<Self, IcgemError> {
-        let p = icgem::parse(text)?;
-        Ok(Self {
+    /// Parse a static ICGEM `.gfc` text, keeping degrees `≤ max_degree`
+    /// (`None`: everything the file has).
+    ///
+    /// See [`IcgemParseError`] for what is rejected. With a cap the parser
+    /// stops at the line that completes the requested triangle and returns
+    /// [`IcgemParseError::DegreeUnavailable`] if the file has fewer degrees
+    /// than asked for. The whole text must already be in memory; on `std`,
+    /// [`from_icgem_reader`](Self::from_icgem_reader) avoids that.
+    pub fn from_icgem(text: &str, max_degree: Option<usize>) -> Result<Self, IcgemParseError> {
+        icgem::parse(text, max_degree).map(Self::from_parsed)
+    }
+
+    /// Parse a static ICGEM `.gfc` stream line by line, keeping degrees
+    /// `≤ max_degree` (`None`: everything the file has).
+    ///
+    /// Reading stops once the requested triangle is complete, so a 70×70
+    /// request on the degree-2190 EGM2008 file (~132 MB of text, 2.4 M
+    /// coefficients) reads the header plus ~2600 records and allocates the
+    /// 2556-entry arrays — neither the rest of the file nor the 38 MB full set
+    /// is ever in memory.
+    #[cfg(feature = "std")]
+    pub fn from_icgem_reader(
+        reader: impl std::io::BufRead,
+        max_degree: Option<usize>,
+    ) -> Result<Self, IcgemFileError> {
+        let mut parser = icgem::Parser::new(max_degree);
+        for line in reader.lines() {
+            let line = line.map_err(IcgemFileError::Io)?;
+            parser.feed_line(&line).map_err(IcgemFileError::Parse)?;
+            if parser.is_complete() {
+                break;
+            }
+        }
+        parser
+            .finish()
+            .map(Self::from_parsed)
+            .map_err(IcgemFileError::Parse)
+    }
+
+    /// Open a static ICGEM `.gfc` file and parse it with
+    /// [`from_icgem_reader`](Self::from_icgem_reader).
+    #[cfg(feature = "std")]
+    pub fn from_icgem_file(
+        path: &std::path::Path,
+        max_degree: Option<usize>,
+    ) -> Result<Self, IcgemFileError> {
+        let file = std::fs::File::open(path).map_err(IcgemFileError::Io)?;
+        Self::from_icgem_reader(std::io::BufReader::new(file), max_degree)
+    }
+
+    fn from_parsed(p: icgem::ParsedIcgem) -> Self {
+        Self {
             gm_km3_s2: p.gm_km3_s2,
             radius_km: p.radius_km,
             max_degree: p.max_degree,
@@ -231,20 +280,7 @@ impl SphericalHarmonicCoefficients {
             model_name: p.model_name,
             c: p.c,
             s: p.s,
-        })
-    }
-
-    /// Read and parse a static ICGEM `.gfc` file.
-    ///
-    /// Large official files (EGM2008 to degree 2190 is ~100 MB) parse in full;
-    /// the [`SphericalHarmonicField`] built on top then selects the window the
-    /// simulation needs.
-    // TODO: stream-parse with a degree cut-off so a full EGM2008 file does not
-    // allocate 2.4 M coefficients just to keep 70×70.
-    #[cfg(feature = "std")]
-    pub fn from_icgem_file(path: &std::path::Path) -> Result<Self, IcgemFileError> {
-        let text = std::fs::read_to_string(path).map_err(IcgemFileError::Io)?;
-        Self::from_icgem(&text).map_err(IcgemFileError::Parse)
+        }
     }
 
     /// Build a set from explicit fully normalized coefficients.
@@ -918,7 +954,7 @@ gfc 2 0 -4.8e-4 0.0
 gfc 2 1 0.0 0.0
 gfc 2 2 2.4e-6 -1.4e-6
 ";
-        let c = SphericalHarmonicCoefficients::from_icgem(text).unwrap();
+        let c = SphericalHarmonicCoefficients::from_icgem(text, None).unwrap();
         assert_eq!(c.max_degree(), 2);
         assert_eq!(c.gm(), 398600.4415);
         assert_eq!(c.radius(), 6378.1363);

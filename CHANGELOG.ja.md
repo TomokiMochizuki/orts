@@ -1039,7 +1039,12 @@ orts は マルチパッケージ workspace (crates.io Rust crate + npm package)
   な `gfc` record のみ。時変 record `gfct`/`trnd`/`dot`/`asin`/`acos` と
   `unnormalized` は明示エラーで拒否。`errors` の列数、`m ≤ n`、重複、非有限値、
   `C00 = 1`、degree-1 がゼロであること、係数の完備性を検証。`norm` は必須、
-  `max_degree` は `gravity::MAX_DEGREE` = 2190 が上限。`gm()`, `radius()`,
+  header key の二重宣言はエラー、`max_degree` は `gravity::MAX_DEGREE` = 2190
+  が上限)。`from_icgem(text, max_degree)`, `from_icgem_reader(BufRead,
+  max_degree)`, `from_icgem_file(path, max_degree)` は任意の degree 上限を取り、
+  その三角が揃った行で読み止めるので、degree 2190 の EGM2008 file に 70×70 を
+  要求しても 70×70 分しか確保しない。file が持たない degree の要求は
+  `IcgemParseError::DegreeUnavailable`。accessor は `gm()`, `radius()`,
   `tide_system()` (記録のみ、変換しない), `coefficient(n, m)`) と、
   `gravity::SphericalHarmonicField`: 一つの係数集合 (`Arc` で共有) の
   degree × order 窓に対する body frame での非中心 potential / 加速度の
