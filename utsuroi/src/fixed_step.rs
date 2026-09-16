@@ -328,23 +328,42 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
     /// `roots` are what keep that step from reporting the departure as a new
     /// crossing, so the same set has to be passed back.
     ///
+    /// `event_check` is the one [`advance_to`](Self::advance_to) takes, and it
+    /// is asked in the same places: about the state the walk starts from, and
+    /// about each ordinary step it commits. A boundary is not one of those
+    /// places — that state is the caller's to handle — so a caller whose
+    /// condition can hold there asks it again once it has.
+    ///
     /// A value that is already zero at the state the stepper starts from is the
     /// "before" of the first step, and that step reports a root as soon as the
     /// value leaves zero toward the side the event counts. What stops a
     /// resumption from reporting the root it is standing on is
     /// [`RootGuard`](crate::RootGuard), which the same `roots` carries: the step
     /// starting at that root's own time does not report that event again.
-    pub fn advance_to_roots<F>(
+    pub fn advance_to_roots<F, E, B>(
         &mut self,
         t_target: f64,
         mut callback: F,
+        event_check: E,
         roots: &mut RootSet<'_, S::State>,
-    ) -> Result<RootOutcome, IntegrationError>
+    ) -> Result<RootOutcome<B>, IntegrationError>
     where
         F: FnMut(f64, &S::State),
+        E: Fn(f64, &S::State) -> ControlFlow<B>,
     {
         validate_step_size(self.dt)?;
         validate_time_span(self.t, t_target)?;
+        // The same question `advance_to` asks before it steps, for the same
+        // reason: a level-triggered event can already hold on the state the
+        // stepper holds, and stepping first would report it one step late.
+        // Asked before the set reads its values, so a walk that stops here
+        // leaves the guards and the roots of the last walk alone.
+        if !self.start_is_checked
+            && self.t < t_target
+            && let ControlFlow::Break(reason) = event_check(self.t, &self.state)
+        {
+            return Ok(RootOutcome::Event { reason });
+        }
         roots.begin(self.t, &self.state)?;
 
         for step in FixedSteps::new(self.t, t_target, self.dt)? {
@@ -407,6 +426,9 @@ impl<'a, I: Integrator + ?Sized, S: DynamicalSystem> FixedStepper<'a, I, S> {
             // root reads the state from the stepper.
             if outcome.is_none() {
                 callback(self.t, &self.state);
+                if let ControlFlow::Break(reason) = event_check(self.t, &self.state) {
+                    return Ok(RootOutcome::Event { reason });
+                }
             }
 
             if let Some(outcome) = outcome {

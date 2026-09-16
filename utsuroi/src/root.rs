@@ -232,9 +232,16 @@ pub struct RootHit {
 
 /// How a walk with root events ended.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RootOutcome {
+pub enum RootOutcome<B> {
     /// The target time was reached with no root in the way.
     Reached,
+    /// The caller's termination check broke on an ordinary step, with this
+    /// reason. Boundaries are not run past it: a caller that stops the walk
+    /// stops it whether or not an event was about to cross.
+    Event {
+        /// What the check reported.
+        reason: B,
+    },
     /// One or more events crossed. [`RootSet::hits`] lists them, ordered by
     /// priority and then by registration order.
     Roots {
